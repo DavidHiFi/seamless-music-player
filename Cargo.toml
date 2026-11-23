@@ -36,10 +36,10 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 lofty = "0.22"
 notify = "7"
 notify-debouncer-full = "0.4"
-symphonia = { version = "0.5", features = ["mp3", "flac", "aac", "isomp4", "alac", "pcm", "vorbis", "opus", "aiff", "wav"] }
+symphonia = { version = "0.5", features = ["mp3", "flac", "aac", "isomp4", "alac", "pcm", "vorbis", "wav"] }
 rubato = "0.16"
 cpal = "0.15"
-realfft = "6"
+realfft = "3"
 discord-rich-presence = "0.2"
 include_dir = "0.7"
 sha1 = "0.10"
