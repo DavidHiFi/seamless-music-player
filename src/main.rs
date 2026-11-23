@@ -12,6 +12,7 @@ mod lyrics;
 mod migrate;
 mod online;
 mod player;
+mod popup;
 mod scrobble;
 mod selftest;
 mod settings;
@@ -57,6 +58,7 @@ use wry::{WebView, WebViewBuilder, WebViewBuilderExtWindows};
 /// never touch the webview directly.
 pub enum UserEvent {
     Ipc(String),
+    PopupIpc(String),
     Emit(String),
     Tray(TrayIconEvent),
     Menu(MenuEvent),
@@ -820,6 +822,40 @@ fn main() {
         .build(&window)
         .expect("webview");
 
+    // The warm pop-up window: hidden, owned by the main window, no taskbar
+    // entry, real acrylic. It shares the main webview's browser process.
+    let popup_window = WindowBuilder::new()
+        .with_title("Seamless Music Player")
+        .with_decorations(false)
+        .with_transparent(true)
+        .with_visible(false)
+        .with_resizable(false)
+        .with_inner_size(PhysicalSize::new(240u32, 120u32))
+        .with_skip_taskbar(true)
+        .with_owner_window(window.hwnd())
+        .with_undecorated_shadow(true)
+        .build(&event_loop)
+        .expect("popup window");
+    popup::apply_acrylic(popup_window.hwnd(), popup::TINT);
+    let popup_ipc = event_loop.create_proxy();
+    let popup_view = WebViewBuilder::new_with_web_context(&mut ctx)
+        .with_url("smp://app/index.html?popup=1")
+        .with_transparent(true)
+        .with_devtools(false)
+        .with_default_context_menus(false)
+        .with_hotkeys_zoom(false)
+        .with_custom_protocol("smp".into(), move |_, req: Request<Vec<u8>>| {
+            serve_uri(req.uri().path())
+        })
+        .with_ipc_handler(move |req| {
+            let _ = popup_ipc.send_event(UserEvent::PopupIpc(req.into_body()));
+        })
+        .with_navigation_handler(move |url| url.starts_with("smp://"))
+        .build(&popup_window)
+        .expect("popup webview");
+    let mut pending = popup::Pending::default();
+    let mut popup_kind = String::new();
+
     let mut tray: Option<TrayIcon> = None;
     let item_show = MenuItem::with_id("show", "Show", true, None);
     let item_toggle = MenuItem::with_id("toggle", "Play", true, None);
@@ -940,6 +976,28 @@ fn main() {
                         let _ = window.drag_window();
                         reply(&events, id, true, json!({ "ok": true }));
                     }
+                    "popup.open" => {
+                        let args = &v["args"];
+                        let origin = window.inner_position().map(|p| (p.x, p.y)).unwrap_or((0, 0));
+                        if pending.open && popup_window.is_visible() {
+                            events.emit("popup.closed", json!({ "token": pending.token }));
+                        }
+                        pending = popup::Pending {
+                            token: args["token"].as_str().unwrap_or("").to_string(),
+                            anchor: popup::anchor_to_screen(args, origin, window.scale_factor()),
+                            placement: args["placement"].as_str().unwrap_or("below").to_string(),
+                            open: true,
+                        };
+                        popup_kind = args["kind"].as_str().unwrap_or("menu").to_string();
+                        let _ = popup_view.evaluate_script(&format!(
+                            "window.__smpPopup&&window.__smpPopup.render({args})"
+                        ));
+                        reply(&events, id, true, json!({ "ok": true }));
+                    }
+                    "popup.close" => {
+                        let _ = popup_view.evaluate_script("window.__smpPopup&&window.__smpPopup.hide()");
+                        reply(&events, id, true, json!({ "ok": true }));
+                    }
                     _ => match dispatch(&app, id, &cmd, &v["args"]) {
                         Some(Ok(data)) => reply(&events, id, true, data),
                         Some(Err(e)) => reply(&events, id, false, Value::from(e)),
@@ -947,14 +1005,84 @@ fn main() {
                     },
                 }
             }
+            Event::UserEvent(UserEvent::PopupIpc(msg)) => {
+                let v: Value = serde_json::from_str(&msg).unwrap_or(Value::Null);
+                let args = &v["args"];
+                let token = pending.token.clone();
+                match v["cmd"].as_str().unwrap_or("") {
+                    // The page measured its surface: size, place, show.
+                    "popup.size" if pending.open => {
+                        let scale = popup_window.scale_factor();
+                        let w = (args["w"].as_f64().unwrap_or(240.0) * scale).ceil() as i32;
+                        let h = (args["h"].as_f64().unwrap_or(120.0) * scale).ceil() as i32;
+                        let gap = (4.0 * scale).round() as i32;
+                        let (x, y) = popup::place(pending.anchor, (w, h), &pending.placement, gap);
+                        popup_window.set_inner_size(PhysicalSize::new(w as u32, h as u32));
+                        popup_window.set_outer_position(PhysicalPosition::new(x, y));
+                        let _ = popup_view.set_bounds(wry::Rect {
+                            position: wry::dpi::PhysicalPosition::new(0, 0).into(),
+                            size: wry::dpi::PhysicalSize::new(w as u32, h as u32).into(),
+                        });
+                        popup_window.set_visible(true);
+                        popup_window.set_focus();
+                        let _ = popup_view.focus();
+                        let _ = popup_view.evaluate_script("window.__smpPopup&&window.__smpPopup.shown()");
+                    }
+                    "popup.pick" => {
+                        let mut out = args.clone();
+                        out["token"] = Value::from(token);
+                        events.emit("popup.picked", out);
+                        let _ = popup_view.evaluate_script("window.__smpPopup&&window.__smpPopup.hide()");
+                    }
+                    "popup.close" => {
+                        let _ = popup_view.evaluate_script("window.__smpPopup&&window.__smpPopup.hide()");
+                    }
+                    // The close animation finished.
+                    "popup.hidden" => {
+                        popup_window.set_visible(false);
+                        if pending.open {
+                            pending.open = false;
+                            events.emit("popup.closed", json!({ "token": token }));
+                        }
+                    }
+                    "window.startDrag" => {
+                        let _ = popup_window.drag_window();
+                    }
+                    cmd if !cmd.is_empty() => {
+                        // A dialog asking for data: answer straight into the pop-up page.
+                        let id = v["id"].as_u64().unwrap_or(0);
+                        let (ok, data) = match dispatch(&app, id, cmd, args) {
+                            Some(Ok(d)) => (true, d),
+                            Some(Err(e)) => (false, Value::from(e)),
+                            None => (true, Value::Null),
+                        };
+                        let _ = popup_view.evaluate_script(&format!(
+                            "window.__smp&&window.__smp.reply({id},{ok},{data})"
+                        ));
+                    }
+                    _ => {}
+                }
+            }
             Event::UserEvent(UserEvent::Emit(script)) => {
                 let _ = webview.evaluate_script(&script);
             }
+            Event::WindowEvent { window_id, event: WindowEvent::Focused(false), .. }
+                if window_id == popup_window.id() =>
+            {
+                // Menus and lists close when they lose focus; dialogs stay.
+                if pending.open && popup_kind != "dialog" {
+                    let _ = popup_view.evaluate_script("window.__smpPopup&&window.__smpPopup.hide()");
+                }
+            }
+            Event::WindowEvent { window_id, .. } if window_id == popup_window.id() => {}
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 close_requested(&settings, &window, &webview, cf, &mut tray, &player, false);
             }
             Event::WindowEvent { event: WindowEvent::Moved(_), .. } => {
                 rect_dirty = true;
+                if pending.open && popup_kind != "dialog" {
+                    let _ = popup_view.evaluate_script("window.__smpPopup&&window.__smpPopup.hide()");
+                }
             }
             Event::WindowEvent { event: WindowEvent::Resized(size), .. } => {
                 rect_dirty = true;

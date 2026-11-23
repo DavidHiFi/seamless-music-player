@@ -73,6 +73,24 @@ Commands (`cmd`, args -> reply data):
 - `window.minimize|maximize|close|startDrag` (native title bar stays; these are for the mini player)
 - `app.info` -> `{version, memoryMb}`
 
+Pop-ups (added 2026-11-24, owner rule: real acrylic, never in-page CSS blur). Every menu,
+context menu, pick list, pop-over and dialog opens in one native acrylic window that loads
+`index.html?popup=1`. In that mode the page draws only the pop-up surface on a transparent
+body with no CSS blur and no fill of its own (the window is the glass), and exposes
+`window.__smpPopup = {render(payload), shown(), hide()}`.
+- Main page: `popup.open {token, kind:"menu"|"list"|"popover"|"dialog", anchor:{x,y,w,h}
+  (CSS px from the page's top-left), placement?:"below"|"above"|"end"|"right"|"point"|"center",
+  title?, items?:[{id, label, icon?, hint?, checked?, disabled?, sep?, danger?}], body?}`;
+  `popup.close`. Listen for events `popup.picked {token, id, values?}` and `popup.closed {token}`.
+- Pop-up page: after `render`, measure the surface and send `popup.size {w,h}` (CSS px);
+  Rust places it inside the monitor, flips when there is no room, shows and focuses it,
+  then calls `shown()` (start the fade plus short slide). On click send
+  `popup.pick {id, values?}`; Esc sends `popup.close`. `hide()` plays the close animation
+  (none when motion is off) then sends `popup.hidden`. Menus and lists close when the
+  window loses focus or the main window moves; dialogs stay until closed and drag with
+  `window.startDrag`. Other commands from a dialog are answered into the pop-up page.
+- Stay in the page: tooltips, toasts and anything nested inside a pop-up.
+
 Events: `player.state` (on change, plus 4 Hz position while playing), `viz` `{bars:[f32]}`,
 `library.changed`, `scan.progress` `{done,total}`, `online.results`, `download.progress`
 `{jobId, pct, state}`, `toast` `{text, kind}`.
