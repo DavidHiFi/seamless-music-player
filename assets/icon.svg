@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Seamless Music Player icon: Mocha crust tile, an eighth note inside a ring,
+       blue #89B4FA to mauve #CBA6F7. Same family as Etcher: rounded tile, one dark mark. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#89B4FA"/>
+      <stop offset="1" stop-color="#CBA6F7"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#tile)"/>
+  <g fill="#11111B">
+    <path fill-rule="evenodd"
+          d="M256 88a168 168 0 1 0 .1 0Z M256 134.4a121.6 121.6 0 1 1-.1 0Z"/>
+    <circle cx="225" cy="318" r="40"/>
+    <rect x="258" y="148" width="36" height="170"/>
+    <path d="M294 148C332 162 336 186 334 210 327 232 316 242 296 246 300 226 298 204 294 186Z"/>
+  </g>
+</svg>
