@@ -1,0 +1,61 @@
+[package]
+name = "seamless-music-player"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Seamless Music Player: a fast Windows music player with a library, gapless playback, crossfade, EQ, lyrics, scrobbling, Discord status and online search, for Windows."
+default-run = "smp"
+
+[[bin]]
+name = "smp"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2", features = ["json"] }
+tao = "0.37.2"
+wry = "0.57.2"
+tray-icon = "0.26.1"
+windows = { version = "0.58", features = [
+  "implement",
+  "Win32_Foundation",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Threading",
+  "Win32_UI_Controls",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+  "Media_Playback",
+  "Media",
+  "Foundation",
+] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+lofty = "0.22"
+notify = "7"
+notify-debouncer-full = "0.4"
+symphonia = { version = "0.5", features = ["mp3", "flac", "aac", "isomp4", "alac", "pcm", "vorbis", "opus", "aiff", "wav"] }
+rubato = "0.16"
+cpal = "0.15"
+realfft = "6"
+discord-rich-presence = "0.2"
+include_dir = "0.7"
+sha1 = "0.10"
+regex = "1"
+unicode-normalization = "0.1"
+dirs = "5"
+# Native folder picker for library.addFolder without a path.
+rfd = "0.14"
+
+[build-dependencies]
+# Puts smp.ico into the exe file itself, so Explorer and shortcuts show it.
+embed-resource = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
+panic = "abort"
