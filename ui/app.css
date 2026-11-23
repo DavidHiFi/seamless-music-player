@@ -801,10 +801,8 @@ img { -webkit-user-drag: none; user-select: none; }
 .drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 10px; }
 .drawer .row { min-height: 46px; }
 
-/* ---------- menus, dropdown lists, dialogs ---------- */
-.menu-layer { position: fixed; inset: 0; z-index: 200; }
+/* ---------- menus, pick lists and dialogs (drawn in the pop-up window) ---------- */
 .menu {
-  position: fixed; z-index: 201;
   min-width: 180px;
   padding: 6px;
   border-radius: 12px;
@@ -834,15 +832,14 @@ img { -webkit-user-drag: none; user-select: none; }
 .menu-item:hover .ic, .menu-item.kbd .ic { color: var(--blue); }
 .menu-item:hover::after, .menu-item.kbd::after { opacity: 1; }
 .menu-item .chk { margin-left: auto; color: var(--mauve); width: 14px; height: 14px; }
+.menu-item .hint { margin-left: auto; color: var(--ov0); font-size: 11px; padding-left: 14px; }
+.menu-item .sub-arrow { margin-left: auto; color: var(--ov0); display: inline-flex; }
+.menu-item .sub-arrow .ic { width: 12px; height: 12px; }
+.menu-item.danger, .menu-item.danger .ic, .menu-item.danger:hover .ic { color: var(--red); }
+.menu-item.disabled { opacity: 0.4; pointer-events: none; }
+.menu-item.open-sub { background: var(--mantle); }
 .menu-sep { height: 1px; margin: 4px 8px; background: var(--s0); }
 
-.dialog-layer {
-  position: fixed; inset: 0; z-index: 300;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(17, 17, 27, 0.45);
-  -webkit-backdrop-filter: blur(3px);
-          backdrop-filter: blur(3px);
-}
 .dialog {
   position: relative;
   width: 400px; max-width: calc(100vw - 48px);
@@ -867,20 +864,7 @@ img { -webkit-user-drag: none; user-select: none; }
 .col-opt.on .box { background: var(--grad); box-shadow: none; }
 .col-opt .box .ic { width: 10px; height: 10px; }
 
-/* listbox under a combo field: never wider than its field */
-.listbox {
-  position: fixed; z-index: 210;
-  padding: 5px; border-radius: 10px; color: var(--text);
-}
-.listbox .opt {
-  position: relative;
-  height: 28px; padding: 0 9px; border-radius: 6px;
-  display: flex; align-items: center; gap: 8px;
-  color: var(--sub1); font-size: 12px; white-space: nowrap; cursor: pointer;
-}
-.listbox .opt:hover { background: rgba(24, 24, 37, 0.7); box-shadow: inset 0 0 0 1px var(--grad); }
-.listbox .opt.on { color: var(--text); background: rgba(17, 17, 27, 0.62); }
-.listbox .opt.on::after { content: ""; width: 5px; height: 5px; border-radius: 99px; background: var(--mauve); margin-left: auto; }
+/* pick lists and popovers render in the pop-up window; styles live at the bottom */
 
 /* ---------- tooltips ---------- */
 [data-tip] { position: relative; }
@@ -919,6 +903,7 @@ img { -webkit-user-drag: none; user-select: none; }
   width: 260px; max-width: 86vw;
   padding: 10px 12px;
   border-radius: 10px;
+  background: rgba(24, 24, 37, 0.88);
   color: var(--text);
   pointer-events: auto;
 }
@@ -1176,10 +1161,6 @@ img { -webkit-user-drag: none; user-select: none; }
 @keyframes pop-out-centre { to { opacity: 0; transform: translate(-50%, calc(-50% + 8px)); } }
 
 .dialog.anim-in-centre, .dialog.closing { transform: none; }
-.dialog.anim-in-centre { animation: dlg-in calc(var(--dur-open)) ease-out both; }
-.dialog.closing.anim-out-centre { animation: dlg-out calc(var(--dur-close)) ease-in both; }
-@keyframes dlg-in { from { opacity: 0; transform: translateY(8px); } }
-@keyframes dlg-out { to { opacity: 0; transform: translateY(8px); } }
 
 .online.anim-in-right { transform: none; }
 .online.closing.anim-out-right { transform: none; }
@@ -1202,9 +1183,6 @@ img { -webkit-user-drag: none; user-select: none; }
 .menu.closing.anim-out-top { animation: menu-out calc(var(--dur-close)) ease-in both; }
 @keyframes menu-out { to { opacity: 0; transform: translateY(-5px); } }
 
-.listbox.anim-in-top { animation: menu-in calc(var(--dur-open)) ease-out both; }
-.listbox.closing.anim-out-top { animation: menu-out calc(var(--dur-close)) ease-in both; }
-
 .page-anim { animation: page-in calc(var(--dur-open)) ease-out both; }
 @keyframes page-in { from { opacity: 0; transform: translateY(6px); } }
 
@@ -1216,6 +1194,73 @@ img { -webkit-user-drag: none; user-select: none; }
     scroll-behavior: auto !important;
   }
 }
+
+/* ---------- pop-up window page (?popup=1) ----------
+   The native window is the acrylic glass: the page stays transparent, no blur,
+   no fill of its own. The surface carries the 2px edge on the 8px window radius. */
+body.popup #app, body.popup #npPage, body.popup #onlinePanel, body.popup #queueDrawer,
+body.popup #miniPlayer, body.popup #toasts { display: none !important; }
+
+.popup-layer {
+  position: fixed; inset: 0;
+  display: flex; align-items: flex-start; justify-content: flex-start;
+}
+.pop-surface { position: relative; color: var(--text); }
+.pop-surface::before, .pop-surface::after {
+  content: ""; position: absolute; inset: 0; z-index: 3; border-radius: inherit; padding: 2px;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  pointer-events: none;
+  transition: opacity 150ms ease-out;
+}
+.pop-surface::before { background: var(--edge); }
+.pop-surface::after { background: var(--grad); opacity: 0; }
+.pop-surface:hover::after { opacity: 1; }
+
+.popup-layer .menu {
+  position: relative;
+  min-width: 190px; max-width: 340px;
+  max-height: 480px;
+  overflow-y: auto;
+  border-radius: 8px;
+}
+.popup-layer .menu.plist { min-width: 220px; }
+
+.popup-layer .dialog { position: relative; border-radius: 8px; max-height: none; }
+.pdlg { width: 400px; padding: 12px 18px 16px; }
+.pdlg .dlg-head {
+  display: flex; align-items: center;
+  margin: 0 -8px 8px; padding: 6px 8px 8px;
+  border-bottom: 1px solid var(--s0);
+  cursor: default;
+  user-select: none; -webkit-user-select: none;
+  touch-action: none;
+}
+.pdlg .dlg-head:active { background: var(--hover-fill); border-radius: 6px; }
+.pdlg h3 { font-size: 14px; font-weight: 700; }
+.pdlg .dlg-body input[type="text"] { margin-top: 4px; }
+.need-name { box-shadow: inset 0 0 0 1px var(--red) !important; }
+
+.ppop { padding: 12px 14px; border-radius: 8px; }
+.ppop-title { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.ppop-body { font-size: 12px; color: var(--sub1); line-height: 1.6; }
+
+/* open and close: fade plus a short slide away from the anchored edge */
+.pop-surface.pre { opacity: 0; }
+.pop-surface.anim-in-down { animation: ppin-down calc(var(--dur-open)) ease-out both; }
+.pop-surface.anim-in-up   { animation: ppin-up calc(var(--dur-open)) ease-out both; }
+.pop-surface.anim-in-side { animation: ppin-side calc(var(--dur-open)) ease-out both; }
+@keyframes ppin-down { from { opacity: 0; transform: translateY(-8px); } }
+@keyframes ppin-up   { from { opacity: 0; transform: translateY(8px); } }
+@keyframes ppin-side { from { opacity: 0; transform: translateX(-8px); } }
+.pop-surface.closing.anim-out-down { animation: ppout-down calc(var(--dur-close)) ease-in both; }
+.pop-surface.closing.anim-out-up   { animation: ppout-up calc(var(--dur-close)) ease-in both; }
+.pop-surface.closing.anim-out-side { animation: ppout-side calc(var(--dur-close)) ease-in both; }
+@keyframes ppout-down { to { opacity: 0; transform: translateY(-8px); } }
+@keyframes ppout-up   { to { opacity: 0; transform: translateY(8px); } }
+@keyframes ppout-side { to { opacity: 0; transform: translateX(-8px); } }
 
 /* ---------- narrow width ---------- */
 @media (max-width: 620px) {

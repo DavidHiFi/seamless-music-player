@@ -110,6 +110,7 @@ const IPC = (() => {
   }
   return {
     call,
+    post: (msg) => send(msg),
     on(name, fn) {
       if (!listeners.has(name)) listeners.set(name, []);
       listeners.get(name).push(fn);
@@ -127,6 +128,11 @@ window.__smp = {
 };
 /* artwork base: the real app uses the smp:// scheme, tests override it */
 const artSrc = (id) => (id ? (window.__ART_BASE || "smp://art/") + id : null);
+
+/* pop-up window plumbing: token -> {onPick, onClose} while a pop-up is open */
+const POPUP_MODE = new URLSearchParams(location.search).has("popup");
+const popupWaiters = new Map();
+let popupSeq = 0, popupTokenNow = null;
 
 /* ---------- state ---------- */
 const S = {
@@ -181,88 +187,82 @@ function closePop(node, anim, remove) {
   } else finish();
 }
 
-/* ---------- popups: context menus, dropdown lists, dialogs ---------- */
-const MENU_LAYER = () => $("#menuLayer");
+/* ---------- pop-ups through the native acrylic window (SPEC.md contract) ---------- */
+function popupOpen(kind, opts) {
+  opts = opts || {};
+  const token = "p" + (++popupSeq);
+  popupWaiters.set(token, opts);
+  popupTokenNow = token;
+  return IPC.call("popup.open", {
+    token, kind,
+    anchor: opts.anchor || { x: 0, y: 0, w: 0, h: 0 },
+    placement: opts.placement || "below",
+    title: opts.title,
+    items: opts.items,
+    body: opts.body,
+  });
+}
+function popupClose() {
+  if (popupTokenNow != null) IPC.call("popup.close", { token: popupTokenNow });
+}
+
+/* menus: {label, ic, fn, check, hint, danger, disabled, children} or "sep" */
+function convMenu(items, prefix, fns) {
+  const out = [];
+  (items || []).forEach((it, i) => {
+    if (it === "sep" || it.sep) { out.push({ id: prefix + i, sep: true }); return; }
+    const id = prefix + i;
+    const row = { id, label: it.label, icon: it.ic, checked: !!it.check };
+    if (it.hint) row.hint = it.hint;
+    if (it.danger) row.danger = true;
+    if (it.disabled) row.disabled = true;
+    if (it.children) row.children = convMenu(it.children, id + ".", fns);
+    else fns[id] = it.fn;
+    out.push(row);
+  });
+  return out;
+}
 function showMenu(items, x, y) {
-  closeMenus();
-  const layer = MENU_LAYER();
-  layer.classList.remove("hidden");
-  const m = el("div", "menu pop-panel");
-  items.forEach((it) => {
-    if (it === "sep") { m.appendChild(el("div", "menu-sep")); return; }
-    const b = el("button", "menu-item");
-    b.innerHTML = `${icon(it.ic || "info")}<span>${esc(it.label)}</span>${it.check ? icon("check", "chk") : ""}`;
-    b.addEventListener("click", () => { closeMenus(); if (it.fn) it.fn(); });
-    m.appendChild(b);
+  const fns = {};
+  const rows = convMenu(items, "m", fns);
+  return popupOpen("menu", {
+    anchor: { x, y, w: 0, h: 0 },
+    placement: "point",
+    items: rows,
+    onPick: (id) => { const fn = fns[id]; if (fn) fn(); },
   });
-  layer.appendChild(m);
-  openPop(m, "top");
-  const r = m.getBoundingClientRect();
-  m.style.left = Math.min(Math.max(6, x), window.innerWidth - r.width - 6) + "px";
-  m.style.top = Math.min(Math.max(6, y), window.innerHeight - r.height - 6) + "px";
-  if (m.style.left !== Math.max(6, x) + "px") m.style.left = Math.max(6, x) + "px";
-  return m;
 }
-function closeMenus() {
-  const layer = MENU_LAYER();
-  if (layer.classList.contains("hidden")) return;
-  [...layer.children].forEach((m) => closePop(m, "top", true));
-  setTimeout(() => layer.classList.add("hidden"), 180);
-}
-MENU_LAYER().addEventListener("mousedown", (e) => { if (e.target === MENU_LAYER()) closeMenus(); });
 
-function showListbox(fieldNode, options, current, onPick) {
-  closeListbox();
-  const lb = el("div", "listbox pop-panel");
-  options.forEach((opt) => {
-    const o = el("div", "opt" + (opt === current ? " on" : ""));
-    o.textContent = typeof opt === "string" ? opt : opt.label;
-    o.addEventListener("click", () => { closeListbox(); onPick(opt); });
-    lb.appendChild(o);
-  });
-  document.body.appendChild(lb);
-  openPop(lb, "top");
+/* pick list under a combo field */
+function showListbox(fieldNode, options, current, onPick, onClose) {
   const fr = fieldNode.getBoundingClientRect();
-  const lr = lb.getBoundingClientRect();
-  let left = Math.min(fr.left, window.innerWidth - lr.width - 8);
-  lb.style.left = Math.max(6, left) + "px";
-  lb.style.top = Math.min(fr.bottom + 5, window.innerHeight - lr.height - 8) + "px";
-  lb.dataset.owner = "1";
-}
-function closeListbox() {
-  document.querySelectorAll(".listbox").forEach((lb) => closePop(lb, "top", true));
-  document.querySelectorAll(".combo.open").forEach((c) => c.classList.remove("open"));
-}
-document.addEventListener("mousedown", (e) => {
-  if (!e.target.closest(".listbox") && !e.target.closest(".combo")) closeListbox();
-  if (!e.target.closest(".menu") && !e.target.closest(".menu-layer") === false) { /* handled by layer */ }
-}, true);
-
-/* dialog */
-function showDialog(title, bodyHTML, actions) {
-  closeDialog();
-  const layer = $("#dialogLayer");
-  layer.classList.remove("hidden");
-  const d = el("div", "dialog pop-panel");
-  d.innerHTML = `<h3>${esc(title)}</h3><div class="dlg-body">${bodyHTML}</div><div class="dlg-actions"></div>`;
-  const act = d.querySelector(".dlg-actions");
-  (actions || []).forEach((a) => {
-    const b = el("button", "btn" + (a.primary ? " primary" : ""));
-    b.textContent = a.label;
-    b.addEventListener("click", () => { if (!a.fn || a.fn(d) !== false) closeDialog(); });
-    act.appendChild(b);
+  const rows = options.map((opt, i) => ({
+    id: String(i),
+    label: typeof opt === "string" ? opt : opt.label,
+    checked: opt === current,
+  }));
+  return popupOpen("list", {
+    anchor: { x: fr.left, y: fr.top, w: fr.width, h: fr.height },
+    placement: "below",
+    items: rows,
+    onPick,
+    onClose,
   });
-  layer.appendChild(d);
-  openPop(d, "centre");
-  return d;
 }
-function closeDialog() {
-  const layer = $("#dialogLayer");
-  if (layer.classList.contains("hidden")) return;
-  [...layer.children].forEach((d) => closePop(d, "centre", true));
-  setTimeout(() => layer.classList.add("hidden"), 180);
+
+/* dialog: actions {label, primary, fn(values)}; inputs in the body carry data-name */
+function showDialog(title, bodyHTML, actions) {
+  const rows = (actions || []).map((a, i) => ({ id: "a" + i, label: a.label, primary: !!a.primary }));
+  return popupOpen("dialog", {
+    title,
+    body: bodyHTML,
+    items: rows,
+    onPick: (id, vals) => {
+      const a = (actions || []).find((x, i) => "a" + i === id);
+      if (a && a.fn) a.fn(vals || {});
+    },
+  });
 }
-$("#dialogLayer").addEventListener("mousedown", (e) => { if (e.target === e.currentTarget) closeDialog(); });
 
 /* ---------- shared builders ---------- */
 function artImg(src, cls, iconCls) {
@@ -338,14 +338,23 @@ async function playTracksOf(list) {
 }
 function trackMenu(ids, x, y, ctx) {
   const multi = ids.length > 1;
+  const rateKids = [0, 1, 2, 3, 4, 5].map((n) => ({
+    label: n === 0 ? "No rating" : n + (n === 1 ? " star" : " stars"), ic: "star",
+    fn: () => ids.forEach((id) => IPC.call("track.setRating", { id, rating: n })),
+  }));
+  const plKids = (S.playlists || []).map((p) => ({
+    label: p.name, ic: "playlists",
+    fn: async () => { await IPC.call("playlists.add", { path: p.path, trackIds: ids }); toast("ok", "Added to playlist", p.name); },
+  }));
+  plKids.push("sep", { label: "New playlist", ic: "plus", fn: () => newPlaylistDialog(ids) });
   const items = [
     { label: multi ? "Play now" : "Play now", ic: "play", fn: async () => { await playFromList(ids, 0); } },
     { label: "Play next", ic: "next", fn: () => IPC.call("player.queueAdd", { trackIds: ids, next: true }) },
     { label: "Add to queue", ic: "queueadd", fn: () => IPC.call("player.queueAdd", { trackIds: ids }) },
     "sep",
-    { label: "Add to playlist", ic: "plus", fn: () => addToPlaylistMenu(ids, x, y) },
+    { label: "Add to playlist", ic: "plus", children: plKids },
     { label: "Love", ic: "heart", fn: () => ids.forEach((id) => IPC.call("track.setLove", { id, love: true })) },
-    { label: "Rate", ic: "star", fn: () => rateMenu(ids, x, y) },
+    { label: "Rate", ic: "star", children: rateKids },
   ];
   if (ctx && ctx.playlist) {
     items.push("sep", { label: "Remove from this playlist", ic: "x", fn: async () => {
@@ -361,21 +370,6 @@ function trackMenu(ids, x, y, ctx) {
     { label: "Delete", ic: "trash", fn: () => confirmDelete(ids) });
   showMenu(items, x, y);
 }
-function rateMenu(ids, x, y) {
-  const items = [0, 1, 2, 3, 4, 5].map((n) => ({
-    label: n === 0 ? "No rating" : n + (n === 1 ? " star" : " stars"), ic: "star",
-    fn: () => ids.forEach((id) => IPC.call("track.setRating", { id, rating: n })),
-  }));
-  showMenu(items, x, y);
-}
-function addToPlaylistMenu(ids, x, y) {
-  const items = (S.playlists || []).map((p) => ({
-    label: p.name, ic: "playlists",
-    fn: async () => { await IPC.call("playlists.add", { path: p.path, trackIds: ids }); toast("ok", "Added to playlist", p.name); },
-  }));
-  items.push("sep", { label: "New playlist", ic: "plus", fn: () => newPlaylistDialog(ids) });
-  showMenu(items, x, y);
-}
 function confirmDelete(ids) {
   showDialog("Delete from library",
     `<p>Delete ${ids.length === 1 ? "this song" : ids.length + " songs"} from your library? The files move to the Recycle Bin.</p>`,
@@ -385,13 +379,13 @@ function confirmDelete(ids) {
     ]);
 }
 async function newPlaylistDialog(addIds) {
-  const d = showDialog("New playlist",
-    `<input class="txtbox" type="text" placeholder="Playlist name" spellcheck="false">`,
+  showDialog("New playlist",
+    `<input class="txtbox" type="text" data-name="name" placeholder="Playlist name" required spellcheck="false">`,
     [
       { label: "Cancel" },
-      { label: "Create", primary: true, fn: async (dlg) => {
-        const name = dlg.querySelector("input").value.trim();
-        if (!name) return false;
+      { label: "Create", primary: true, fn: async (vals) => {
+        const name = String((vals && vals.name) || "").trim();
+        if (!name) return;
         const res = await IPC.call("playlists.create", { name });
         await loadPlaylists();
         const p = res && res.path ? res : (S.playlists || []).find((p) => p.name === name);
@@ -399,9 +393,6 @@ async function newPlaylistDialog(addIds) {
         nav("playlists", { path: p && p.path });
       } },
     ]);
-  const inp = d.querySelector("input");
-  inp.focus();
-  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") d.querySelector(".dlg-actions .btn.primary").click(); });
 }
 
 /* ---------- settings application ---------- */
@@ -772,22 +763,17 @@ function playFromList(trackIds, startIndex) {
 }
 function columnPicker() {
   const opts = SONG_COLS.filter(([k]) => k !== "num");
-  const body = `<div class="col-list">${opts.map(([k, label]) => `
-    <div class="col-opt ${S.songsCols.includes(k) ? "on" : ""}" data-col="${k}">
+  const body = `<div class="col-list" data-check-group="cols">${opts.map(([k, label]) => `
+    <div class="col-opt ${S.songsCols.includes(k) ? "on" : ""}" data-check="${k}">
       <span class="box">${S.songsCols.includes(k) ? icon("check") : ""}</span><span>${esc(label || "Artwork")}</span>
     </div>`).join("")}</div>`;
-  showDialog("Columns in the songs table", body, [{ label: "Done", primary: true }]);
-  $("#dialogLayer").addEventListener("click", (e) => {
-    const opt = e.target.closest(".col-opt");
-    if (!opt) return;
-    const k = opt.dataset.col;
-    const i = S.songsCols.indexOf(k);
-    if (i >= 0) S.songsCols.splice(i, 1); else S.songsCols.push(k);
-    opt.classList.toggle("on");
-    opt.querySelector(".box").innerHTML = opt.classList.contains("on") ? icon("check") : "";
-  }, { once: false });
-  const h = () => { closeDialog(); $("#dialogLayer").removeEventListener("mousedown", h); };
-  $("#dialogLayer").addEventListener("mousedown", (e) => { if (e.target === e.currentTarget) h(); });
+  showDialog("Columns in the songs table", body, [
+    { label: "Done", primary: true, fn: (vals) => {
+      const picked = (vals && vals.cols) || [];
+      const next = SONG_COLS.filter(([k]) => k === "num" || picked.includes(k)).map(([k]) => k);
+      if (next.length > 2) { S.songsCols = next; renderPage(); }
+    } },
+  ]);
 }
 
 /* ---------- artist / album / genre pages ---------- */
@@ -1002,15 +988,14 @@ async function screenPlaylist(root, token) {
 }
 function refreshPlaylist(path) { nav("playlist", { path }, true); }
 async function renamePlaylist(p) {
-  const d = showDialog("Rename playlist", `<input class="txtbox" type="text" value="${esc(p.name)}" spellcheck="false">`,
-    [{ label: "Cancel" }, { label: "Rename", primary: true, fn: async (dlg) => {
-      const name = dlg.querySelector("input").value.trim();
-      if (!name) return false;
+  showDialog("Rename playlist",
+    `<input class="txtbox" type="text" data-name="name" value="${esc(p.name)}" required spellcheck="false">`,
+    [{ label: "Cancel" }, { label: "Rename", primary: true, fn: async (vals) => {
+      const name = String((vals && vals.name) || "").trim();
+      if (!name) return;
       await IPC.call("playlists.rename", { path: p.path, name });
       await loadPlaylists(); renderPage();
     } }]);
-  const inp = d.querySelector("input"); inp.focus(); inp.select();
-  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") d.querySelector(".primary").click(); });
 }
 function confirmPlaylistDelete(p) {
   showDialog("Delete playlist", `<p>Delete "${esc(p.name)}"? Your songs stay in the library.</p>`,
@@ -1335,7 +1320,7 @@ function mkCombo(options, get, set, width) {
     showListbox(c, options.map((o) => o.label), c.textContent, (picked) => {
       const o = options.find((o) => o.label === picked);
       if (o) { set(o.value); label(); }
-    });
+    }, () => c.classList.remove("open"));
     c.classList.add("open");
   });
   return c;
@@ -1765,6 +1750,18 @@ function onPlayerState(st) {
 }
 function wireEvents() {
   IPC.on("player.state", onPlayerState);
+  IPC.on("popup.picked", (p) => {
+    if (!p) return;
+    const w = popupWaiters.get(p.token);
+    popupWaiters.delete(p.token);
+    if (w && w.onPick) { try { w.onPick(p.id, p.values || {}); } catch (err) { console.error(err); } }
+  });
+  IPC.on("popup.closed", (p) => {
+    if (!p) return;
+    const w = popupWaiters.get(p.token);
+    popupWaiters.delete(p.token);
+    if (w && w.onClose) { try { w.onClose(); } catch (err) { console.error(err); } }
+  });
   IPC.on("viz", (p) => { vizBars = p && p.bars ? p.bars : null; if (S.np) requestAnimationFrame(drawViz); });
   IPC.on("library.changed", async () => {
     S.overview = await IPC.call("library.overview");
@@ -1860,12 +1857,11 @@ function wireControls() {
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey && e.key.toLowerCase() === "f") { e.preventDefault(); $("#searchInput").focus(); }
     else if (e.key === "Escape") {
-      if (!$("#menuLayer").classList.contains("hidden")) closeMenus();
-      else if (!$("#dialogLayer").classList.contains("hidden")) closeDialog();
-      else if (S.mini) toggleMini(false);
+      if (S.mini) toggleMini(false);
       else if (S.np) closeNp();
       else if (S.queueOpen) toggleQueue(false);
       else if (S.online.open) { clearSearchResults(); closeOnline(); }
+      else popupClose();
     }
   });
   document.addEventListener("mousedown", (e) => {
@@ -1876,6 +1872,258 @@ function wireControls() {
   setInterval(() => { if (S.np && S.player.playing) drawViz(); }, 100);
   setInterval(updateLyrics, 500);
 }
+/* ---------- pop-up window page (?popup=1): draws only the pop-up surface.
+   The native window is the acrylic glass: transparent body, no blur, no fill.
+   Contract in SPEC.md: render(payload) -> popup.size, shown() -> open animation,
+   hide() -> close animation -> popup.hidden, click -> popup.pick, Esc -> popup.close. */
+const CHECK_HTML = `<span class="ic chk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS.check}</svg></span>`;
+
+function bootPopup() {
+  document.body.classList.add("popup");
+  hydrateIcons(document);
+  const layer = $("#popupLayer");
+  const P = {
+    token: "", kind: "menu", place: "point", surface: null, shown: false,
+    rows: [], kbd: -1, buf: "", bufT: 0, fallback: 0, subs: [],
+  };
+
+  IPC.call("settings.get").then((st) => {
+    if (st) { S.settings = st; applySettings(); }
+  }).catch(() => {});
+
+  function motionOn() {
+    const mo = (S.settings || {}).motion || {};
+    return mo.enabled !== false && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+  function readDur(varName) {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue(varName) || "120ms";
+    const n = parseInt(raw, 10);
+    return isFinite(n) && n >= 0 ? n : 120;
+  }
+  function post(cmd, args) { IPC.post({ id: 0, cmd, args: args || {} }); }
+  function sendSize() {
+    if (!P.surface) return;
+    const r = P.surface.getBoundingClientRect();
+    post("popup.size", { w: Math.ceil(r.width), h: Math.ceil(r.height) });
+  }
+  /* which way the surface slides, away from the edge it is anchored to */
+  function slideDir() {
+    if (P.kind === "dialog" || P.kind === "popover") return "up";
+    if (P.place === "above" || P.place === "top") return "up";
+    if (P.place === "end" || P.place === "right") return "side";
+    return "down";
+  }
+
+  function makeRow(it) {
+    if (!it || it.sep) return el("div", "menu-sep");
+    const b = el("button", "menu-item" + (it.danger ? " danger" : "") + (it.disabled ? " disabled" : ""));
+    b.type = "button";
+    b.tabIndex = -1;
+    b.dataset.id = it.id || "";
+    let html = `${icon(it.icon || "info")}<span>${esc(it.label || "")}</span>`;
+    if (it.hint) html += `<span class="hint">${esc(it.hint)}</span>`;
+    if (it.children) html += `<span class="sub-arrow">${icon("chevron-right")}</span>`;
+    else if (it.checked) html += CHECK_HTML;
+    b.innerHTML = html;
+    if (it.children) b._kids = it.children;
+    return b;
+  }
+
+  function buildMenuSurface(payload, list) {
+    const s = el("div", "menu pop-surface" + (list ? " plist" : ""));
+    (payload.items || []).forEach((it) => s.appendChild(makeRow(it)));
+    return s;
+  }
+  function buildPopover(payload) {
+    const s = el("div", "pop-surface ppop");
+    if (payload.title) s.appendChild(el("div", "ppop-title", esc(payload.title)));
+    if (payload.body) s.appendChild(el("div", "ppop-body", payload.body));
+    return s;
+  }
+  function buildDialog(payload) {
+    const s = el("div", "dialog pdlg pop-surface");
+    const head = el("div", "dlg-head");
+    head.innerHTML = `<h3>${esc(payload.title || "")}</h3>`;
+    s.appendChild(head);
+    s.appendChild(el("div", "dlg-body", payload.body || ""));
+    const act = el("div", "dlg-actions");
+    (payload.items || []).forEach((a) => {
+      const b = el("button", "btn" + (a.primary ? " primary" : ""));
+      b.type = "button";
+      b.textContent = a.label || "";
+      b.dataset.id = a.id || "";
+      act.appendChild(b);
+    });
+    s.appendChild(act);
+    return s;
+  }
+
+  function collectValues() {
+    const vals = {};
+    if (!P.surface) return vals;
+    P.surface.querySelectorAll("[data-name]").forEach((n) => {
+      vals[n.dataset.name] = n.type === "checkbox" ? n.checked : n.value;
+    });
+    P.surface.querySelectorAll("[data-check-group]").forEach((g) => {
+      vals[g.dataset.checkGroup] = [...g.querySelectorAll(".col-opt.on")].map((o) => o.dataset.check);
+    });
+    return vals;
+  }
+  function pick(id) {
+    const missing = [...P.surface.querySelectorAll("[data-name][required]")].some((n) => !String(n.value).trim());
+    if (missing) {
+      const bad = [...P.surface.querySelectorAll("[data-name][required]")].find((n) => !String(n.value).trim());
+      bad.classList.add("need-name");
+      try { bad.focus(); } catch (e) {}
+      setTimeout(() => bad.classList.remove("need-name"), 900);
+      return;
+    }
+    post("popup.pick", { token: P.token, id, values: collectValues() });
+  }
+
+  function render(payload) {
+    payload = payload || {};
+    P.token = payload.token || "";
+    P.kind = payload.kind || "menu";
+    P.place = payload.placement || "point";
+    P.shown = false;
+    P.rows = []; P.kbd = -1; P.buf = ""; P.subs = [];
+    layer.innerHTML = "";
+    let s;
+    if (P.kind === "dialog") s = buildDialog(payload);
+    else if (P.kind === "popover") s = buildPopover(payload);
+    else s = buildMenuSurface(payload, P.kind === "list");
+    s.classList.add("pre");
+    layer.appendChild(s);
+    P.surface = s;
+    P.rows = [...s.querySelectorAll(".menu-item:not(.disabled)")];
+    requestAnimationFrame(() => {
+      sendSize();
+      if (P.kind === "dialog") {
+        const f = s.querySelector("input, textarea");
+        if (f) setTimeout(() => { try { f.focus(); } catch (e) {} }, 0);
+      }
+    });
+    clearTimeout(P.fallback);
+    P.fallback = setTimeout(() => { if (!P.shown) shown(); }, 500);
+  }
+
+  function shown() {
+    if (!P.surface || P.shown) return;
+    P.shown = true;
+    clearTimeout(P.fallback);
+    const s = P.surface;
+    s.classList.remove("pre");
+    if (motionOn()) s.classList.add("anim-in-" + slideDir());
+  }
+
+  function hide() {
+    clearTimeout(P.fallback);
+    if (!P.surface) { post("popup.hidden"); return; }
+    const s = P.surface;
+    if (!motionOn()) {
+      layer.innerHTML = ""; P.surface = null; P.subs = [];
+      post("popup.hidden");
+      return;
+    }
+    const dir = slideDir();
+    s.classList.remove("anim-in-down", "anim-in-up", "anim-in-side");
+    s.classList.add("closing", "anim-out-" + dir);
+    setTimeout(() => {
+      layer.innerHTML = ""; P.surface = null; P.subs = [];
+      post("popup.hidden");
+    }, readDur("--dur-close") + 20);
+  }
+
+  /* nested sub-menu: another glass panel beside this one, inside the same window */
+  function closeSubmenus(from) {
+    while (P.subs.length > from) {
+      const sub = P.subs.pop();
+      sub.el.remove();
+      if (sub.owner) sub.owner.classList.remove("open-sub");
+    }
+    sendSize();
+  }
+  function openSubmenu(row) {
+    const depth = P.subs.findIndex((x) => x.owner === row);
+    if (depth >= 0) { closeSubmenus(depth + 1); return; }
+    closeSubmenus(P.subs.length ? 1 : 0);
+    const sub = el("div", "menu submenu pop-surface");
+    (row._kids || []).forEach((it) => sub.appendChild(makeRow(it)));
+    layer.appendChild(sub);
+    const ownerRect = row.getBoundingClientRect();
+    const layerRect = layer.getBoundingClientRect();
+    sub.style.marginTop = Math.max(0, ownerRect.top - layerRect.top) + "px";
+    row.classList.add("open-sub");
+    P.subs.push({ el: sub, owner: row });
+    requestAnimationFrame(sendSize);
+  }
+
+  function setKbd(i) {
+    if (!P.rows.length) return;
+    P.kbd = (i + P.rows.length) % P.rows.length;
+    P.rows.forEach((r) => r.classList.remove("kbd"));
+    P.rows[P.kbd].classList.add("kbd");
+    P.rows[P.kbd].scrollIntoView({ block: "nearest" });
+  }
+  function activate(row) {
+    if (!row || row.classList.contains("disabled")) return;
+    if (row._kids) { openSubmenu(row); return; }
+    pick(row.dataset.id);
+  }
+  function typeFind(ch) {
+    const now = Date.now();
+    P.buf = now - P.bufT > 700 ? ch : P.buf + ch;
+    P.bufT = now;
+    const buf = P.buf.toLowerCase();
+    const start = P.kbd + 1;
+    for (let k = 0; k < P.rows.length; k++) {
+      const i = (start + k) % P.rows.length;
+      const label = (P.rows[i].textContent || "").trim().toLowerCase();
+      if (label.startsWith(buf) || (P.buf.length > 1 && label.includes(buf))) { setKbd(i); return; }
+    }
+  }
+
+  layer.addEventListener("mousedown", (e) => {
+    if (P.kind !== "dialog") return;
+    const head = e.target.closest(".dlg-head");
+    if (head && !e.target.closest("input, textarea, select, button")) post("window.startDrag");
+  });
+  layer.addEventListener("click", (e) => {
+    const row = e.target.closest(".menu-item");
+    if (row) { activate(row); return; }
+    const opt = e.target.closest(".col-opt");
+    if (opt) {
+      opt.classList.toggle("on");
+      const box = opt.querySelector(".box");
+      if (box) box.innerHTML = opt.classList.contains("on") ? CHECK_HTML : "";
+      return;
+    }
+    const btn = e.target.closest(".dlg-actions .btn");
+    if (btn) pick(btn.dataset.id);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (!P.surface) return;
+    if (e.key === "Escape") { e.preventDefault(); post("popup.close", { token: P.token }); return; }
+    if (P.kind === "dialog" || P.kind === "popover") {
+      if (e.key === "Enter" && e.target.tagName !== "BUTTON") {
+        const p = P.surface.querySelector(".dlg-actions .btn.primary");
+        if (p) { e.preventDefault(); p.click(); }
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") { e.preventDefault(); setKbd(P.kbd + 1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setKbd(P.kbd - 1); }
+    else if (e.key === "Enter") { e.preventDefault(); activate(P.rows[P.kbd]); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); const r = P.rows[P.kbd]; if (r && r._kids) openSubmenu(r); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); if (P.subs.length) closeSubmenus(P.subs.length - 1); }
+    else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) typeFind(e.key);
+  });
+
+  window.__smpPopup = { render, shown, hide };
+}
+
 async function boot() {
   hydrateIcons(document);
   S.settings = (await IPC.call("settings.get")) || {};
@@ -1890,5 +2138,10 @@ async function boot() {
   markTabs();
   renderPage();
 }
-if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
-else boot();
+if (POPUP_MODE) {
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootPopup);
+  else bootPopup();
+} else {
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
+}
