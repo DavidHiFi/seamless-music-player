@@ -1,8 +1,12 @@
-"""Generate the Seamless Music Player icon set from assets/icon.svg.
+"""Generate the Seamless Music Player icon set.
 
-Produces assets/smp.ico (16, 20, 24, 32, 40, 48, 64, 256) and
-assets/icon-preview.png (512). Pure Python with Pillow; the SVG paths are
-redrawn directly so the small sizes stay crisp.
+Same family as Etcher's icon: an inset rounded tile with a vertical blue
+#89B4FA to mauve #CBA6F7 gradient and one bold Mocha base #1E1E2E mark.
+The mark is a pair of beamed eighth notes, built only from ellipses and
+straight-edged polygons so every size stays clean.
+
+Produces assets/smp.ico (16, 20, 24, 32, 40, 48, 64, 256),
+assets/icon-preview.png (512) and assets/icon.svg.
 
 Run: python -I assets/tools/make-icon.py
 """
@@ -16,123 +20,112 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parent.parent
 BLUE = (0x89, 0xB4, 0xFA)
 MAUVE = (0xCB, 0xA6, 0xF7)
-CRUST = (0x11, 0x11, 0x1B)
+MARK = (0x1E, 0x1E, 0x2E, 255)
 ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 256]
 
-TILE_R = 112 / 512  # corner radius as a fraction of the tile
+INSET = 18      # tile inset in 512 units, as Etcher
+RADIUS = 60     # tile corner radius in 512 units
+DX = -6         # nudge to centre the mark optically
+
+HEAD_RX, HEAD_RY, HEAD_TILT = 60, 43, -22
+HEADS = [(178, 372), (356, 332)]
+STEM_W = 36
+BEAM_T = 66
+# stem top points sit under the beam; the beam runs from the left stem to the right stem
+BEAM_L = (204, 150)
+BEAM_R = (414, 104)
 
 
-def grad_at(x, y, size):
-    """Vertical blue to mauve gradient, 0 at the top."""
-    t = y / max(size - 1, 1)
-    return tuple(round(BLUE[i] + (MAUVE[i] - BLUE[i]) * t) for i in range(3))
+def ellipse_pts(cx, cy, rx, ry, tilt_deg, steps=160):
+    t = math.radians(tilt_deg)
+    ct, st = math.cos(t), math.sin(t)
+    pts = []
+    for i in range(steps):
+        a = 2 * math.pi * i / steps
+        x, y = rx * math.cos(a), ry * math.sin(a)
+        pts.append((cx + x * ct - y * st, cy + x * st + y * ct))
+    return pts
 
 
-def rounded_tile_mask(size):
-    """Anti-aliased rounded-square mask for the tile."""
-    ss = max(4, 512 // size * 4)  # supersample
-    big = size * ss
-    m = Image.new("L", (big, big), 0)
-    d = ImageDraw.Draw(m)
-    r = round(TILE_R * big)
-    d.rounded_rectangle([0, 0, big - 1, big - 1], radius=r, fill=255)
-    return m.resize((size, size), Image.LANCZOS)
+def head_right_x(cx, cy):
+    """x of the head's right-most point and its y, so the stem meets it flush."""
+    pts = ellipse_pts(cx, cy, HEAD_RX, HEAD_RY, HEAD_TILT, 720)
+    return max(pts, key=lambda p: p[0])
 
 
-def arc_ring(d: ImageDraw.ImageDraw, cx, cy, r_out, r_in, a0, a1, u, steps=220):
-    pts_out, pts_in = [], []
-    for i in range(steps + 1):
-        a = math.radians(a0 + (a1 - a0) * i / steps)
-        pts_out.append((u * (cx + r_out * math.cos(a)), u * (cy + r_out * math.sin(a))))
-        pts_in.append((u * (cx + r_in * math.cos(a)), u * (cy + r_in * math.sin(a))))
-    d.polygon(pts_out + pts_in[::-1], fill=CRUST)
-
-
-def draw_mark(d: ImageDraw.ImageDraw, u: float):
-    """Draw the ring-and-note mark. u = one unit (tile/512).
-
-    Coordinates follow assets/icon.svg: an annulus ring, a note head, a stem
-    and a curved flag, all inside the ring with a clear gap.
-    """
-
-    def quad(p0, c, p1, steps):
-        return [(u * (p0[0] + (c[0] - p0[0]) * t + ((p1[0] - c[0]) - (p0[0] - c[0])) * t * t),
-                 u * (p0[1] + (c[1] - p0[1]) * t + ((p1[1] - c[1]) - (p0[1] - c[1])) * t * t))
-                for t in (i / steps for i in range(steps + 1))]
-
-    # ring: annulus 88..424 with a 46.4 unit wall
-    arc_ring(d, 256, 256, 168, 121.6, 0, 360, u)
-    # note head
-    r_head = 40
-    steps = 120
-    pts = [(u * (225 + r_head * math.cos(2 * math.pi * i / steps)),
-            u * (318 + r_head * math.sin(2 * math.pi * i / steps))) for i in range(steps)]
-    d.polygon(pts, fill=CRUST)
-    # stem
-    d.polygon([(u * x, u * y) for x, y in [(258, 148), (294, 148), (294, 318), (258, 318)]], fill=CRUST)
-    # flag: two outer curves, one inner curve, closed along the stem edge
-    flag = (quad((294, 148), (332, 164), (334, 210), 24)
-            + quad((334, 210), (324, 236), (296, 246), 16)
-            + quad((296, 246), (298, 216), (294, 186), 16))
-    d.polygon(flag, fill=CRUST)
-
-
-def draw_mark_small(d: ImageDraw.ImageDraw, u: float):
-    """Simplified mark for 16 to 24 px: note only, thicker head and stem.
-
-    The ring reads as mud at those sizes, so the small frames keep the mark
-    alone, slightly larger and centred.
-    """
-    head = 46
-    steps = 60
-    pts = [(u * (240 + head * math.cos(2 * math.pi * i / steps)),
-            u * (330 + head * math.sin(2 * math.pi * i / steps))) for i in range(steps)]
-    d.polygon(pts, fill=CRUST)
-    stem = [(268, 120), (310, 120), (310, 334), (268, 334)]
-    flag = [(310, 120), (378, 158), (310, 196)]
-    d.polygon([(u * x, u * y) for x, y in stem], fill=CRUST)
-    d.polygon([(u * x, u * y) for x, y in flag], fill=CRUST)
+def mark_shapes():
+    """Polygons of the mark in 512 units."""
+    shapes = []
+    stems = []
+    for (cx, cy) in HEADS:
+        shapes.append(ellipse_pts(cx + DX, cy, HEAD_RX, HEAD_RY, HEAD_TILT))
+        rx, ry = head_right_x(cx + DX, cy)
+        stems.append((rx - STEM_W, rx, ry))
+    # the beam spans exactly from the left stem's left edge to the right stem's right edge
+    lx, rx_ = stems[0][0], stems[1][1]
+    slope = (BEAM_R[1] - BEAM_L[1]) / (BEAM_R[0] - BEAM_L[0])
+    ly = BEAM_L[1] + slope * (lx - (BEAM_L[0] + DX))
+    ry_ = BEAM_L[1] + slope * (rx_ - (BEAM_L[0] + DX))
+    beam_top = lambda x: ly + slope * (x - lx)
+    for x0, x1, foot in stems:
+        shapes.append([(x0, beam_top(x0)), (x1, beam_top(x1)), (x1, foot), (x0, foot + 6)])
+    shapes.append([(lx, ly), (rx_, ry_), (rx_, ry_ + BEAM_T), (lx, ly + BEAM_T)])
+    return shapes
 
 
 def make(size: int) -> Image.Image:
-    im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    u = size / 512
-    # tile with the vertical gradient
-    px = im.load()
-    mask = rounded_tile_mask(size)
-    for y in range(size):
-        c = grad_at(0, y, size)
-        for x in range(size):
-            px[x, y] = (*c, 255)
-    im.putalpha(mask)
-    # mark, supersampled for crisp small sizes
-    ss = 6 if size <= 24 else 4 if size <= 48 else 2
-    mark = Image.new("RGBA", (size * ss, size * ss), (0, 0, 0, 0))
-    dm = ImageDraw.Draw(mark)
-    if size <= 24:
-        draw_mark_small(dm, u * ss)
-    else:
-        draw_mark(dm, u * ss)
-    if ss > 1:
-        mark = mark.resize((size, size), Image.LANCZOS)
-    im.alpha_composite(mark)
-    return im
+    ss = 8 if size <= 64 else 4
+    big = size * ss
+    u = big / 512
+    tile = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    grad = Image.new("RGBA", (big, big))
+    gp = grad.load()
+    for y in range(big):
+        t = min(max((y / u - INSET) / (512 - 2 * INSET), 0), 1)
+        c = tuple(round(BLUE[i] + (MAUVE[i] - BLUE[i]) * t) for i in range(3)) + (255,)
+        for x in range(big):
+            gp[x, y] = c
+    mask = Image.new("L", (big, big), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [INSET * u, INSET * u, (512 - INSET) * u - 1, (512 - INSET) * u - 1],
+        radius=RADIUS * u, fill=255)
+    tile.paste(grad, (0, 0), mask)
+    d = ImageDraw.Draw(tile)
+    for poly in mark_shapes():
+        d.polygon([(x * u, y * u) for x, y in poly], fill=MARK)
+    return tile.resize((size, size), Image.LANCZOS)
+
+
+def write_svg():
+    def path(poly):
+        return "M" + " L".join(f"{x:.1f} {y:.1f}" for x, y in poly) + "Z"
+    paths = "\n    ".join(f'<path d="{path(p)}"/>' for p in mark_shapes())
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Seamless Music Player: beamed notes on a blue to mauve tile (Etcher family). -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#89B4FA"/>
+      <stop offset="1" stop-color="#CBA6F7"/>
+    </linearGradient>
+  </defs>
+  <rect x="{INSET}" y="{INSET}" width="{512 - 2 * INSET}" height="{512 - 2 * INSET}" rx="{RADIUS}" fill="url(#tile)"/>
+  <g fill="#1E1E2E">
+    {paths}
+  </g>
+</svg>
+"""
+    (ROOT / "icon.svg").write_text(svg, encoding="utf-8")
 
 
 def main():
-    frames = []
-    for s in ICO_SIZES:
-        im = make(s)
-        frames.append(im)
-    ico_path = ROOT / "smp.ico"
-    big = max(frames, key=lambda f: f.size[0])
-    big.save(ico_path, format="ICO", sizes=[(s, s) for s in ICO_SIZES],
-             append_images=[f for f in frames if f is not big])
-    preview = make(512)
-    preview.save(ROOT / "icon-preview.png")
+    frames = [make(s) for s in ICO_SIZES]
+    big = frames[-1]
+    big.save(ROOT / "smp.ico", format="ICO", sizes=[(s, s) for s in ICO_SIZES],
+             append_images=frames[:-1])
+    make(512).save(ROOT / "icon-preview.png")
+    write_svg()
     print("ok smp.ico", ICO_SIZES)
-    print("ok icon-preview.png 512")
+    print("ok icon-preview.png 512, icon.svg")
 
 
 if __name__ == "__main__":
