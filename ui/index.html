@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seamless Music Player</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<svg class="svg-defs" aria-hidden="true" focusable="false">
+  <defs>
+    <linearGradient id="wave-grad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#89B4FA"/>
+      <stop offset="1" stop-color="#CBA6F7"/>
+    </linearGradient>
+  </defs>
+</svg>
+
+<div id="app">
+  <header class="topbar">
+    <nav id="tabs" class="tabs" aria-label="Pages"></nav>
+    <div class="topbar-right">
+      <div id="searchBox" class="search">
+        <span class="search-ic" data-ic="search"></span>
+        <input id="searchInput" class="search-input" type="text" placeholder="Search your library and online"
+               spellcheck="false" autocomplete="off" aria-label="Search">
+        <button id="searchClear" class="iconbtn tiny hidden" data-ic="x" title="Clear search" aria-label="Clear search"></button>
+      </div>
+    </div>
+  </header>
+
+  <main id="page" class="page" tabindex="-1"></main>
+
+  <footer id="playbar" class="playbar">
+    <div class="wave-row">
+      <span id="posCur" class="wave-time">0:00</span>
+      <div id="wave" class="wave">
+        <svg id="waveSvg" viewBox="0 0 1000 14" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <clipPath id="wave-clip"><rect id="wave-clip-rect" x="0" y="0" width="0" height="14"/></clipPath>
+          </defs>
+          <path id="waveBg" class="wave-bg" d=""/>
+          <path id="waveFg" class="wave-fg" d="" clip-path="url(#wave-clip)"/>
+          <line id="waveFlatBg" class="wave-flat-bg" x1="0" y1="7" x2="1000" y2="7"/>
+          <line id="waveFlatFg" class="wave-flat-fg" x1="0" y1="7" x2="0" y2="7"/>
+        </svg>
+        <div id="waveThumb" class="wave-thumb"></div>
+      </div>
+      <span id="posTotal" class="wave-time">0:00</span>
+    </div>
+    <div class="playbar-row">
+      <div class="np">
+        <button id="npArt" class="np-art" title="Now playing page"></button>
+        <div class="np-meta">
+          <div id="npTitle" class="np-title"></div>
+          <div id="npArtist" class="np-artist"></div>
+        </div>
+        <button id="loveBtn" class="iconbtn" data-ic="heart" title="Love this song" aria-label="Love this song"></button>
+        <div id="rating" class="rating" title="Rating"></div>
+      </div>
+      <div class="controls">
+        <button id="shuffleBtn" class="iconbtn" data-ic="shuffle" title="Shuffle" aria-label="Shuffle"></button>
+        <button id="prevBtn" class="iconbtn" data-ic="prev" title="Previous song" aria-label="Previous song"></button>
+        <button id="playBtn" class="iconbtn big" data-ic="play" title="Play or pause" aria-label="Play or pause"></button>
+        <button id="nextBtn" class="iconbtn" data-ic="next" title="Next song" aria-label="Next song"></button>
+        <button id="loopBtn" class="iconbtn" data-ic="repeat" title="Loop" aria-label="Loop"></button>
+      </div>
+      <div class="utils">
+        <button id="sleepBtn" class="iconbtn" data-ic="moon" title="Sleep timer" aria-label="Sleep timer"></button>
+        <button id="speedBtn" class="iconbtn" data-ic="speed" title="Playback speed" aria-label="Playback speed"></button>
+        <button id="volBtn" class="iconbtn" data-ic="volume" title="Mute" aria-label="Mute"></button>
+        <input id="volSlider" class="vol" type="range" min="0" max="100" value="64" aria-label="Volume">
+        <button id="queueBtn" class="iconbtn" data-ic="list" title="Queue" aria-label="Queue"></button>
+        <button id="miniBtn" class="iconbtn" data-ic="mini" title="Mini player" aria-label="Mini player"></button>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<section id="npPage" class="np-page hidden" aria-label="Now playing">
+  <div class="np-bg"><img id="npBgArt" alt=""></div>
+  <div class="np-tint"></div>
+  <header class="np-head">
+    <button id="npBack" class="iconbtn" data-ic="chevron-down" title="Back to library" aria-label="Back to library"></button>
+    <span class="np-head-label">Now playing</span>
+    <button id="npQueue" class="iconbtn" data-ic="list" title="Queue" aria-label="Queue"></button>
+  </header>
+  <div class="np-body">
+    <div class="np-left">
+      <img id="npArt" class="np-art-big" alt="Album artwork">
+      <div class="np-info">
+        <div id="npTitle2" class="np-title-big"></div>
+        <div id="npArtist2" class="np-sub"></div>
+        <div id="npAlbum2" class="np-sub dim"></div>
+      </div>
+    </div>
+    <div class="np-lyrics glass" id="lyricsBox">
+      <div class="lyrics-head">
+        <span id="lyricsSource" class="dim"></span>
+      </div>
+      <div id="lyricsScroll" class="lyrics-scroll"></div>
+    </div>
+  </div>
+  <div class="np-viz"><canvas id="vizCanvas" height="64"></canvas></div>
+</section>
+
+<aside id="onlinePanel" class="online pop-panel hidden" aria-label="Online results">
+  <header class="online-head">
+    <span class="online-label">Online</span>
+    <span id="onlineSpin" class="spin hidden"></span>
+    <button id="onlineClose" class="iconbtn tiny" data-ic="x" title="Close online results" aria-label="Close online results"></button>
+  </header>
+  <div id="onlineBody" class="online-body"></div>
+</aside>
+
+<aside id="queueDrawer" class="drawer pop-panel hidden" aria-label="Playback queue">
+  <header class="drawer-head">
+    <span class="drawer-label">Queue <span id="queueCount" class="dim"></span></span>
+    <button id="queueClose" class="iconbtn tiny" data-ic="x" title="Close queue" aria-label="Close queue"></button>
+  </header>
+  <div id="queueBody" class="drawer-body"></div>
+</aside>
+
+<div id="miniPlayer" class="mini pop-panel hidden" aria-label="Mini player">
+  <img id="miniArt" class="mini-art" alt="">
+  <div class="mini-meta">
+    <div id="miniTitle" class="mini-title"></div>
+    <div id="miniArtist" class="mini-sub"></div>
+  </div>
+  <div class="mini-ctl">
+    <button id="miniPrev" class="iconbtn tiny" data-ic="prev" title="Previous song" aria-label="Previous song"></button>
+    <button id="miniPlay" class="iconbtn tiny" data-ic="play" title="Play or pause" aria-label="Play or pause"></button>
+    <button id="miniNext" class="iconbtn tiny" data-ic="next" title="Next song" aria-label="Next song"></button>
+  </div>
+  <div class="mini-right">
+    <button id="miniExpand" class="iconbtn tiny" data-ic="maximize" title="Full player" aria-label="Full player"></button>
+    <button id="miniMin" class="iconbtn tiny" data-ic="minus" title="Minimise" aria-label="Minimise"></button>
+    <button id="miniClose" class="iconbtn tiny" data-ic="x" title="Close" aria-label="Close"></button>
+  </div>
+  <div class="mini-line"><div id="miniFill" class="mini-fill"></div></div>
+</div>
+
+<div id="menuLayer" class="menu-layer hidden"></div>
+<div id="dialogLayer" class="dialog-layer hidden"></div>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
