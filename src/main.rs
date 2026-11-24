@@ -146,6 +146,15 @@ fn mime_for(path: &str) -> &'static str {
 
 /// smp://app/<path> serves the embedded ui folder; smp://art/<id> serves the
 /// artwork cache from disk.
+/// Navigation guard. wry rewrites custom-protocol URLs to
+/// `http(s)://smp.<path>` before WebView2 sees them (`smp://app/index.html`
+/// becomes `http://smp.app/index.html`), so both spellings are ours.
+fn app_nav_ok(url: &str) -> bool {
+    url.starts_with("smp://")
+        || url.starts_with("http://smp.")
+        || url.starts_with("https://smp.")
+}
+
 fn serve_uri(path: &str) -> Response<std::borrow::Cow<'static, [u8]>> {
     use std::borrow::Cow;
     let not_found = || {
@@ -832,7 +841,7 @@ fn main() {
                 let _ = load_proxy.send_event(UserEvent::Loaded);
             }
         })
-        .with_navigation_handler(move |url| url.starts_with("smp://"))
+        .with_navigation_handler(move |url| app_nav_ok(&url))
         .build(&window)
         .expect("webview");
 
@@ -864,7 +873,7 @@ fn main() {
         .with_ipc_handler(move |req| {
             let _ = popup_ipc.send_event(UserEvent::PopupIpc(req.into_body()));
         })
-        .with_navigation_handler(move |url| url.starts_with("smp://"))
+        .with_navigation_handler(move |url| app_nav_ok(&url))
         .build(&popup_window)
         .expect("popup webview");
     let mut pending = popup::Pending::default();
@@ -900,7 +909,7 @@ fn main() {
         .with_ipc_handler(move |req| {
             let _ = toast_ipc.send_event(UserEvent::ToastIpc(req.into_body()));
         })
-        .with_navigation_handler(move |url| url.starts_with("smp://"))
+        .with_navigation_handler(move |url| app_nav_ok(&url))
         .build(&toast_window)
         .expect("toast webview");
 

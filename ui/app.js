@@ -126,8 +126,8 @@ window.__smp = {
   reply: (id, ok, data) => IPC._reply(id, ok, data),
   event: (name, payload) => IPC._event(name, payload),
 };
-/* artwork base: the real app uses the smp:// scheme, tests override it */
-const artSrc = (id) => (id ? (window.__ART_BASE || "smp://art/") + id : null);
+/* artwork base: same-origin /art/ hits the app's file handler; tests override it */
+const artSrc = (id) => (id ? (window.__ART_BASE || new URL("/art/", location.href).href) + id : null);
 
 /* pop-up window plumbing: token -> {onPick, onClose} while a pop-up is open */
 const POPUP_MODE = new URLSearchParams(location.search).has("popup");
