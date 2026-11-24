@@ -1622,13 +1622,13 @@ function updateNpInfo() {
   $("#npAlbum2").textContent = t ? t.album || "" : "";
   $("#npArtist2").classList.toggle("lnk", !!t);
   if (t && t.artworkId) {
-    $("#npArt").src = artSrc(t.artworkId);
+    $("#npArtBig").src = artSrc(t.artworkId);
     $("#npBgArt").src = artSrc(t.artworkId);
   } else {
-    $("#npArt").removeAttribute("src");
+    $("#npArtBig").removeAttribute("src");
     $("#npBgArt").removeAttribute("src");
   }
-  $("#npArt").style.display = t && t.artworkId ? "" : "none";
+  $("#npArtBig").style.display = t && t.artworkId ? "" : "none";
   if (t) $("#npAlbum2").innerHTML = `<span class="lnk">${esc(t.album || "")}</span>`;
 }
 async function loadLyrics() {

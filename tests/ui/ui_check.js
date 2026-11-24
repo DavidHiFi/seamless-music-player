@@ -121,6 +121,10 @@ async page => {
   await page.waitForTimeout(500);
   await page.screenshot({ path: REPORTS + "ui-now-playing.png" });
   check("now playing page opens", await page.evaluate(() => !document.querySelector("#npPage").classList.contains("hidden")));
+  check("big artwork gets its source", await page.evaluate(() => {
+    const a = document.querySelector("#npArtBig");
+    return a && a.getAttribute("src") && a.complete && a.naturalWidth > 0;
+  }));
   await page.evaluate(() => closeNp());
 
   // Settings page
@@ -192,7 +196,7 @@ async page => {
   await p2.evaluate(() => {
     document.body.style.background = "repeating-linear-gradient(45deg, #181825 0px, #181825 14px, #1E1E2E 14px, #1E1E2E 28px)";
     const d = document.createElement("div");
-    d.style.cssText = "position:fixed;inset:0;z-index:0;color:rgba(205,214,244,0.6);font:12px monospace;padding:6px;white-space:pre-wrap;overflow:hidden;pointer-events:none";
+    d.style.cssText = "position:fixed;inset:0;z-index:-1;color:rgba(205,214,244,0.6);font:12px monospace;padding:6px;white-space:pre-wrap;overflow:hidden;pointer-events:none";
     d.textContent = Array.from({ length: 30 }, (_, i) => "Busy text behind the pop-up surface, line " + (i + 1) + ", 0123456789").join("\n");
     document.body.appendChild(d);
   });
