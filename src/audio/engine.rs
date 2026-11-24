@@ -81,7 +81,7 @@ pub struct Engine {
     tx: Sender<Cmd>,
     pub shared: Arc<Shared>,
     pub state: Arc<EngineShared>,
-    pub events: Receiver<EngineEv>,
+    pub events: Mutex<Receiver<EngineEv>>,
 }
 
 struct Worker {
@@ -226,7 +226,7 @@ impl Worker {
         let in_chunk = self.res.as_ref().map(|r| r.input_chunk()).unwrap_or(2048);
         self.chunk.clear();
         let mut eof = false;
-        if dec.next_chunk(&mut self.chunk) {
+        let stereo = if dec.next_chunk(&mut self.chunk) {
             let mut stereo = to_stereo(&self.chunk, dec.info.channels);
             self.dsp.process(&mut stereo);
             stereo
@@ -236,7 +236,7 @@ impl Worker {
         };
 
         // Crossfade: near the end, mix the next track in over the fade.
-        let fade = {
+        let (fade, _gapless) = {
             let s = self.settings.settings.lock().unwrap();
             (s.crossfade_seconds, s.gapless)
         };
@@ -520,8 +520,9 @@ impl Engine {
         let (tx, rx) = std::sync::mpsc::channel();
         let (ev_tx, ev_rx) = std::sync::mpsc::channel();
         let (rate, ch) = {
-            let s = settings.settings.lock().unwrap();
-            let _ = s;
+            // The device opens at the track's rate; the worker reopens on
+            // change. Start with the standard pair.
+            let _s = settings.settings.lock().unwrap();
             (48000u32, 2u32)
         };
         let shared = Shared::new(rate, ch, rate as usize * ch as usize / 4);
@@ -564,7 +565,7 @@ impl Engine {
             .name("smp-audio".into())
             .spawn(move || run(w))
             .ok();
-        Engine { tx, shared, state, events: ev_rx }
+        Engine { tx, shared, state, events: Mutex::new(ev_rx) }
     }
 
     pub fn play(&self, path: &Path, seek: f64) {

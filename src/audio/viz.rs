@@ -73,7 +73,7 @@ impl Viz {
         for (s, w) in frame.iter_mut().zip(&self.window) {
             *s *= w;
         }
-        if self.fft.process(&mut frame, &mut self.spectrum, &mut self.scratch).is_err() {
+        if self.fft.process(&mut frame, &mut self.spectrum).is_err() {
             return false;
         }
         for (i, &(b0, b1)) in self.bins.iter().enumerate() {

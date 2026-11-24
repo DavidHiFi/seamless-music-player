@@ -97,8 +97,8 @@ impl Dsp {
         self.eq = if self.eq_enabled {
             EQ_BANDS
                 .iter()
-                .zip(self.eq_gains)
-                .flat_map(|(&f, &g)| vec![Biquad::peaking(f, g, EQ_Q, self.rate); 2])
+                .enumerate()
+                .flat_map(|(i, &f)| vec![Biquad::peaking(f, self.eq_gains[i], EQ_Q, self.rate); 2])
                 .collect()
         } else {
             Vec::new()

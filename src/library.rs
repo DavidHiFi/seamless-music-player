@@ -192,17 +192,27 @@ impl Library {
     // ---- overview / listing ----
 
     pub fn overview(&self) -> Value {
-        let conn = self.conn.lock().unwrap();
-        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0) };
+        // The counts take the connection lock one at a time; holding it
+        // across the distinct counters deadlocks, because they lock too.
+        let counts = {
+            let conn = self.conn.lock().unwrap();
+            let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0) };
+            (
+                count("SELECT COUNT(*) FROM tracks"),
+                count("SELECT COUNT(DISTINCT album_key) FROM tracks WHERE album_key != ''"),
+                count("SELECT COUNT(*) FROM folders"),
+                self.playlist_files().len() as i64,
+            )
+        };
         let artists = self.count_distinct("artists");
         let genres = self.count_distinct("genres");
         json!({
-            "tracks": count("SELECT COUNT(*) FROM tracks"),
-            "albums": count("SELECT COUNT(DISTINCT album_key) FROM tracks WHERE album_key != ''"),
+            "tracks": counts.0,
+            "albums": counts.1,
             "artists": artists,
             "genres": genres,
-            "playlists": self.playlist_files().len() as i64,
-            "folders": count("SELECT COUNT(*) FROM folders"),
+            "playlists": counts.3,
+            "folders": counts.2,
         })
     }
 

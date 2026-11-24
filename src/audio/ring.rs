@@ -2,21 +2,28 @@
 //! Lock-free: the decoder thread writes, the device callback reads, and the
 //! two only meet in their own atomic cursors. Capacity is a power of two.
 
+use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct Ring {
-    buf: Box<[f32]>,
+    // Written by the producer thread, read by the device callback. The
+    // atomics below are the synchronisation; the cell only hands out the
+    // memory.
+    buf: UnsafeCell<Box<[f32]>>,
     mask: usize,
     channels: usize,
     write_pos: AtomicUsize,
     read_pos: AtomicUsize,
 }
 
+// One producer and one consumer, ordered by the Acquire/Release cursors.
+unsafe impl Sync for Ring {}
+
 impl Ring {
     pub fn new(capacity_frames: usize, channels: usize) -> Ring {
         let cap = capacity_frames.max(16).next_power_of_two();
         Ring {
-            buf: vec![0.0; cap * channels].into_boxed_slice(),
+            buf: UnsafeCell::new(vec![0.0; cap * channels].into_boxed_slice()),
             mask: cap - 1,
             channels: channels.max(1),
             write_pos: AtomicUsize::new(0),
@@ -57,9 +64,10 @@ impl Ring {
         }
         let mut w = self.write_pos.load(Ordering::Relaxed) & self.mask;
         let mut off = 0usize;
+        let buf = unsafe { &mut *self.buf.get() };
         for _ in 0..frames {
             let base = w * ch;
-            self.buf[base..base + ch].copy_from_slice(&src[off..off + ch]);
+            buf[base..base + ch].copy_from_slice(&src[off..off + ch]);
             off += ch;
             w = (w + 1) & self.mask;
         }
@@ -81,9 +89,10 @@ impl Ring {
         }
         let mut r = self.read_pos.load(Ordering::Relaxed) & self.mask;
         let mut off = 0usize;
+        let buf = unsafe { &*self.buf.get() };
         for _ in 0..frames {
             let base = r * ch;
-            out[off..off + ch].copy_from_slice(&self.buf[base..base + ch]);
+            out[off..off + ch].copy_from_slice(&buf[base..base + ch]);
             off += ch;
             r = (r + 1) & self.mask;
         }

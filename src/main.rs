@@ -708,6 +708,13 @@ fn signal_running_copy() {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--selftest") {
+        {
+            use std::io::Write;
+            let p = std::env::temp_dir().join("smp-selftest-stages.txt");
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+                let _ = writeln!(f, "main-enter");
+            }
+        }
         let code = selftest::run();
         std::process::exit(code);
     }
@@ -737,6 +744,7 @@ fn main() {
         }
     };
     let player = Player::new(Arc::clone(&events), Arc::clone(&lib), Arc::clone(&settings));
+    online::register_player(&player);
     let smtc = Smtc::new();
     let discord_on = settings.settings.lock().unwrap().discord_enabled;
     let watcher = library::Library::start_watcher(Arc::clone(&lib));

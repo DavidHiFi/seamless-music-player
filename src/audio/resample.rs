@@ -2,7 +2,7 @@
 //! CPU cost stays tiny. The engine feeds fixed stereo chunks and gets the
 //! device-rate chunk back.
 
-use rubato::{FftFixedInOut, Resampler};
+use rubato::{FftFixedInOut, Resampler as RubatoResampler};
 
 pub struct Resampler {
     r: FftFixedInOut<f32>,
@@ -62,10 +62,10 @@ impl Resampler {
                 ch.push(tail[f * self.channels + c]);
             }
         }
-        match self.r.process_partial(Some(&self.input), &mut self.output) {
-            Ok((_, written)) => {
-                let n = written.min(self.output[0].len());
-                interleave(&self.output, n, self.channels)
+        match self.r.process_partial(Some(&self.input), None) {
+            Ok(out) => {
+                let n = out.first().map(|c| c.len()).unwrap_or(0);
+                interleave(&out, n, self.channels)
             }
             Err(_) => Vec::new(),
         }

@@ -12,7 +12,7 @@ use crate::library::Library;
 use crate::settings::SettingsFile;
 use crate::Events;
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -256,6 +256,37 @@ impl Player {
         Ok(json!({ "ok": true }))
     }
 
+    /// Play files that are not in the library, like a streamed online song.
+    pub fn play_paths(&self, paths: &[PathBuf]) -> Result<Value, String> {
+        self.bump();
+        let mut st = self.state.lock().unwrap();
+        self.count_leaving(st.track_id, st.position);
+        st.queue.clear();
+        st.index = 0;
+        st.playing = true;
+        st.position = 0.0;
+        let first = paths.first().cloned().unwrap_or_default();
+        let title = first.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        st.track_id = None;
+        st.track = Some(json!({
+            "path": first.to_string_lossy(),
+            "title": title,
+            "artists": [],
+            "albumArtists": [],
+            "album": "",
+            "duration": 0.0,
+            "artworkId": Value::Null,
+        }));
+        st.duration = 0.0;
+        if first.exists() {
+            self.engine.play(&first, 0.0);
+        }
+        *self.sleep.lock().unwrap() = Sleep { deadline: None, end_of_song: false };
+        drop(st);
+        self.push_state();
+        Ok(json!({ "ok": true }))
+    }
+
     pub fn toggle(&self) -> Result<Value, String> {
         self.bump();
         let playing = {
@@ -384,7 +415,7 @@ impl Player {
                 let mut rng = self.rng();
                 let mut q = st.queue.clone();
                 for i in (1..q.len()).rev() {
-                    let j = rng % (i + 1);
+                    let j = (rng % (i as u64 + 1)) as usize;
                     q.swap(i, j);
                     rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 }
@@ -582,7 +613,7 @@ fn ticker_loop(p: Arc<Player>) {
         std::thread::sleep(Duration::from_millis(wait));
 
         // Engine events: track ends and seamless switches.
-        while let Ok(ev) = p.engine.events.try_recv() {
+        while let Ok(ev) = p.engine.events.lock().unwrap().try_recv() {
             match ev {
                 crate::audio::engine::EngineEv::Switched { duration, crossfaded: _, .. } => {
                     let mut st = p.state.lock().unwrap();
@@ -640,7 +671,7 @@ fn ticker_loop(p: Arc<Player>) {
             if viz_on && last_viz_push.elapsed() >= Duration::from_millis(33) {
                 last_viz_push = Instant::now();
                 let bars = p.engine.bars();
-                p.events.emit("viz", json!({ "bars": bars }));
+                p.events.emit("viz", json!({ "bars": bars.to_vec() }));
             }
             let due = {
                 let sl = p.sleep.lock().unwrap();

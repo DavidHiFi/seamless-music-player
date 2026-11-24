@@ -45,7 +45,7 @@ impl Decoder {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             hint.with_extension(ext);
         }
-        let probed = symphonia::default::get_probe()
+        let mut probed = symphonia::default::get_probe()
             .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
             .map_err(|e| format!("{}: {e}", path.display()))?;
 
@@ -70,9 +70,10 @@ impl Decoder {
 
         let mut rg_track = None;
         let mut rg_album = None;
-        if let Some(rev) = probed.metadata.current() {
+        let mut probe_meta = probed.metadata.get();
+        if let Some(rev) = probe_meta.as_mut().and_then(|m| m.current()) {
             for tag in rev.tags() {
-                let db = parse_gain(&tag.value);
+                let db = parse_gain(&tag.value.to_string());
                 match tag.std_key {
                     Some(StandardTagKey::ReplayGainTrackGain) => rg_track = db,
                     Some(StandardTagKey::ReplayGainAlbumGain) => rg_album = db,
@@ -161,8 +162,9 @@ impl Decoder {
                 ));
             }
             let buf = self.sample_buf.as_mut().unwrap();
+            let frames = decoded.frames() as usize;
             buf.copy_interleaved_ref(decoded);
-            let n = decoded.frames() as usize * self.info.channels;
+            let n = frames * self.info.channels;
             out.extend_from_slice(&buf.samples()[..n]);
             self.frames_out += n as u64 / self.info.channels as u64;
             return true;

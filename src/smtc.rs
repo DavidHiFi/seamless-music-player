@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use windows::core::{factory, interface, GUID, HRESULT, HSTRING, IUnknown};
+use windows::core::{factory, interface, GUID, HRESULT, HSTRING, IUnknown, Interface};
 use windows::Foundation::{TimeSpan, TypedEventHandler, Uri};
 use windows::Media::{
     MediaPlaybackStatus, MediaPlaybackType, SystemMediaTransportControls,
@@ -21,7 +21,7 @@ use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
 
 /// The interop entry: SMTC for our window, so the flyout binds to us.
 #[interface("ddb0472d-c911-4a1f-86d9-9c771bb1c8c9")]
-unsafe interface ISystemMediaTransportControlsInterop: IUnknown {
+unsafe trait ISystemMediaTransportControlsInterop: windows::core::IUnknown {
     fn GetForWindow(
         &self,
         appwindow: HWND,
@@ -101,7 +101,7 @@ fn worker(w: Worker) {
             return;
         }
         unsafe {
-            hwnd = FindWindowW(None, windows::core::w!("Seamless Music Player"));
+            hwnd = FindWindowW(None, windows::core::w!("Seamless Music Player")).unwrap_or_default();
         }
         if !hwnd.is_invalid() {
             break;
@@ -114,11 +114,14 @@ fn worker(w: Worker) {
 
     // Media keys and flyout buttons drive the player through the registry.
     let handler = {
-        TypedEventHandler::new(move |_: Option<&SystemMediaTransportControls>,
-                                    args: Option<&SystemMediaTransportControlsButtonPressedEventArgs>|
+        TypedEventHandler::new(move |_: &Option<SystemMediaTransportControls>,
+                                    args: &Option<SystemMediaTransportControlsButtonPressedEventArgs>|
               -> windows::core::Result<()> {
             let Some(args) = args else { return Ok(()) };
-            let button = args.Button().unwrap_or_default();
+            let button = match args.Button() {
+                Ok(b) => b,
+                Err(_) => return Ok(()),
+            };
             if let Some(p) = PLAYER.get().and_then(|w| w.upgrade()) {
                 match button {
                     windows::Media::SystemMediaTransportControlsButton::Play => {
@@ -145,10 +148,10 @@ fn worker(w: Worker) {
         })
     };
     let _ = smtc.ButtonPressed(&handler);
-    let _ = smtc.IsPlayEnabled(true);
-    let _ = smtc.IsPauseEnabled(true);
-    let _ = smtc.IsNextEnabled(true);
-    let _ = smtc.IsPreviousEnabled(true);
+    let _ = smtc.SetIsPlayEnabled(true);
+    let _ = smtc.SetIsPauseEnabled(true);
+    let _ = smtc.SetIsNextEnabled(true);
+    let _ = smtc.SetIsPreviousEnabled(true);
 
     // Push loop: metadata on change, position every second while playing.
     let mut last_key = String::new();
@@ -193,14 +196,9 @@ fn attach(hwnd: HWND) -> Option<SystemMediaTransportControls> {
                 factory::<SystemMediaTransportControls, ISystemMediaTransportControlsInterop>()
             {
                 let mut out: *mut std::ffi::c_void = std::ptr::null_mut();
-                let hr = (interop.vtable().GetForWindow)(
-                    std::mem::transmute_copy(&interop),
-                    hwnd,
-                    &SystemMediaTransportControls::IID,
-                    &mut out,
-                );
+                let hr = interop.GetForWindow(hwnd, &SystemMediaTransportControls::IID, &mut out);
                 if hr.is_ok() && !out.is_null() {
-                    return Some(SystemMediaTransportControls::from_abi(out as _).ok()?);
+                    return Some(windows_core::Type::from_abi(out as _).ok()?);
                 }
             }
         }
@@ -229,12 +227,13 @@ fn push_metadata(
     } else {
         MediaPlaybackStatus::Paused
     })?;
-    let updater = smtc.DisplayProperties()?;
+    let updater = smtc.DisplayUpdater()?;
     updater.SetType(MediaPlaybackType::Music)?;
-    updater.SetTitle(&HSTRING::from(title))?;
-    updater.SetArtist(&HSTRING::from(artist))?;
-    updater.SetAlbumArtist(&HSTRING::from(artist))?;
-    updater.SetAlbum(&HSTRING::from(album))?;
+    let music = updater.MusicProperties()?;
+    music.SetTitle(&HSTRING::from(title))?;
+    music.SetArtist(&HSTRING::from(artist))?;
+    music.SetAlbumArtist(&HSTRING::from(artist))?;
+    music.SetAlbumTitle(&HSTRING::from(album))?;
     if !art_id.is_empty() {
         if let Ok(uri) = Uri::CreateUri(&HSTRING::from(format!("smp://art/{art_id}.jpg"))) {
             if let Ok(stream) = windows::Storage::Streams::RandomAccessStreamReference::CreateFromUri(&uri) {
@@ -250,12 +249,10 @@ fn push_timeline(
     pos: f64,
     dur: f64,
 ) -> windows::core::Result<()> {
-    let mut tl = SystemMediaTransportControlsTimelineProperties::default();
-    tl.Position = TimeSpan { Duration: (pos * 10_000_000.0) as i64 };
-    tl.EndTime = TimeSpan { Duration: (dur * 10_000_000.0) as i64 };
-    tl.MinSeekTime = TimeSpan { Duration: 0 };
-    tl.MaxSeekTime = TimeSpan { Duration: (dur * 10_000_000.0) as i64 };
-    tl.PlaybackRate = 1.0f32;
-    tl.LastUpdatedTime = windows::Foundation::DateTime { Value: now_100ns() };
-    smtc.SetTimelineProperties(&tl)
+    let tl = SystemMediaTransportControlsTimelineProperties::new()?;
+    tl.SetPosition(TimeSpan { Duration: (pos * 10_000_000.0) as i64 })?;
+    tl.SetEndTime(TimeSpan { Duration: (dur * 10_000_000.0) as i64 })?;
+    tl.SetMinSeekTime(TimeSpan { Duration: 0 })?;
+    tl.SetMaxSeekTime(TimeSpan { Duration: (dur * 10_000_000.0) as i64 })?;
+    smtc.UpdateTimelineProperties(&tl)
 }

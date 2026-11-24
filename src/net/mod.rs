@@ -124,18 +124,17 @@ fn request(method: &str, route: &str, body: Option<&Value>, token: &str) -> Resu
     if !token.is_empty() {
         req = req.set("Authorization", &format!("Bearer {token}"));
     }
-    let req = match body {
+    let mut resp = match body {
         Some(b) => req.send_json(b.clone()),
-        None => req,
-    };
-    let mut resp = req.call().map_err(|e| {
+        None => req.call(),
+    }
+    .map_err(|e| {
         match e {
             ureq::Error::Status(code, _) => code.to_string(),
             other => other.to_string(),
         }
     })?;
-    let mut text = String::new();
-    let _ = resp.read_to_string(&mut text);
+    let text = resp.into_string().unwrap_or_default();
     if text.trim().is_empty() {
         return Ok(json!({}));
     }
@@ -240,7 +239,7 @@ pub fn normalize(text: &str, for_key: bool) -> String {
         let bracketed = regex::Regex::new(r"[\[\(][^\]\)]*[\]\)]").unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
         s = bracketed.replace_all(&s, " ").to_string();
     }
-    let decomposed = unicode_normalization::UnicodeNormalization::nfd(s.collect::<String>());
+    let decomposed = unicode_normalization::UnicodeNormalization::nfd(s.chars());
     let folded: String = decomposed.filter(|c| !(*c as u32 >= 0x0300 && *c as u32 <= 0x036f)).collect();
     folded
         .chars()

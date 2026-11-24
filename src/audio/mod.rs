@@ -6,4 +6,5 @@ pub mod dsp;
 pub mod engine;
 pub mod output;
 pub mod resample;
+pub mod ring;
 pub mod viz;

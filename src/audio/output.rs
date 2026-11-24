@@ -73,7 +73,8 @@ pub fn list_devices() -> Vec<(String, bool)> {
     if let Ok(devs) = host.output_devices() {
         for d in devs {
             if let Ok(name) = d.name() {
-                out.push((name, Some(&name) == default.as_ref()));
+                let is_default = Some(&name) == default.as_ref();
+                out.push((name, is_default));
             }
         }
     }
@@ -102,7 +103,7 @@ pub fn open(preferred: Option<&str>) -> Result<Output, String> {
         let stream = device
             .build_output_stream(
                 &stream_config,
-                move |data: &mut [f32], _: &cpal::OutputCallbackArgs| {
+                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     fill(&cb_shared, data, &mut scratch);
                 },
                 {

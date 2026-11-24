@@ -25,6 +25,16 @@ fn v(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
 
+/// Stage markers land in a temp file, because a release build has no console
+/// to print to and a hang would otherwise be invisible.
+fn stage(mark: &str) {
+    use std::io::Write;
+    let path = std::env::temp_dir().join("smp-selftest-stages.txt");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{mark}");
+    }
+}
+
 pub fn run() -> i32 {
     let mut c = Checker { pass: 0, fails: Vec::new() };
 
@@ -165,20 +175,27 @@ pub fn run() -> i32 {
     );
 
     // ---- library + import on a temp copy ----
+    stage("library");
     std::env::set_var("SMP_DATA_DIR", &tmp);
+    stage("setvar");
     let events = crate::Events::new();
+    stage("events");
     let db = tmp.join("library.db");
     match crate::library::Library::open(&db, events) {
         Ok(lib) => {
+            stage("open-ok");
             let added = lib.add_folder("C:\\Music");
+            stage("addfolder");
             c.check("library addFolder", added.is_ok(), format!("{added:?}"));
             let folders = lib.folders();
+            stage("folders");
             c.check(
                 "library folders count",
                 folders[0]["path"] == json!("C:\\Music"),
                 format!("{folders}"),
             );
             let ov = lib.overview();
+            stage("overview");
             c.check("library overview zero", ov["tracks"] == json!(0), format!("{ov}"));
             // Import from a copy of the real Dopamine database when one is
             // present; counts must match in vs out.
@@ -186,10 +203,12 @@ pub fn run() -> i32 {
                 .map(|d| d.join("Dopamine Enhanced").join("Dopamine.db"))
                 .unwrap_or_default();
             if dopamine_db.exists() {
+                stage("import-copy");
                 let copy = tmp.join("dopamine-copy.db");
                 match std::fs::copy(&dopamine_db, &copy) {
                     Ok(_) => match crate::migrate::run_import(&copy, None, &lib) {
                         Ok(rep) => {
+                            stage("import-done");
                             let ti = rep["counts"]["tracksIn"].as_i64().unwrap_or(-1);
                             let to = rep["counts"]["tracksOut"].as_i64().unwrap_or(-1);
                             c.check(
@@ -209,12 +228,15 @@ pub fn run() -> i32 {
         Err(e) => c.check("library opens", false, e),
     }
     let _ = std::fs::remove_dir_all(&tmp);
+    stage("results");
 
     if c.fails.is_empty() {
+        stage(&format!("PASS {} checks", c.pass));
         println!("selftest: {} checks passed", c.pass);
         0
     } else {
         for f in &c.fails {
+            stage(&format!("FAIL {f}"));
             println!("FAIL {f}");
         }
         1

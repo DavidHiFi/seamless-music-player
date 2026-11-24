@@ -284,7 +284,7 @@ pub fn run_import(db_copy: &Path, config: Option<&Path>, lib: &Library) -> Resul
         )
         .map_err(|e| e.to_string())?;
     let rows: Vec<(String, String, String, String, String, String, String, String, Option<i64>,
-        Option<i64>, Option<i64>, f64, i64, i64, Option<i64>, Option<i64>, i64, i64, i64,
+        Option<i64>, Option<i64>, f64, f64, i64, Option<i64>, Option<i64>, i64, i64, i64,
         Option<i64>, Option<i64>, Option<i64>)> = st
         .query_map([], |r| {
             Ok((
@@ -359,7 +359,7 @@ pub fn run_import(db_copy: &Path, config: Option<&Path>, lib: &Library) -> Resul
                         track_no,
                         disc_no,
                         duration_ms / 1000.0,
-                        bitrate,
+                        *bitrate as i64,
                         sample_rate,
                         rating_of(*rating, *new_rating),
                         love,
