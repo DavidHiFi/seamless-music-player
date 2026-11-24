@@ -5,6 +5,7 @@
 
 #![windows_subsystem = "windows"]
 
+mod audio;
 mod discord;
 mod library;
 mod logic;

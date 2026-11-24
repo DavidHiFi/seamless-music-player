@@ -752,7 +752,8 @@ img { -webkit-user-drag: none; user-select: none; }
   background: var(--base);
   pointer-events: none;
 }
-.pop-panel { background: var(--pop); -webkit-backdrop-filter: blur(var(--blur)) saturate(1.25); backdrop-filter: blur(var(--blur)) saturate(1.25); box-shadow: var(--shadow-big); }
+/* pop-ups draw in the native pop-up window; nothing in-page keeps the old blur */
+.pop-panel { background: var(--panel-solid); box-shadow: var(--shadow-big); }
 .pop-panel::before, .pop-panel::after {
   content: ""; position: absolute; inset: 0; z-index: 3; border-radius: inherit; padding: 2px;
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
