@@ -254,6 +254,8 @@ function showListbox(fieldNode, options, current, onPick, onClose) {
 function showDialog(title, bodyHTML, actions) {
   const rows = (actions || []).map((a, i) => ({ id: "a" + i, label: a.label, primary: !!a.primary }));
   return popupOpen("dialog", {
+    anchor: { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight },
+    placement: "center",
     title,
     body: bodyHTML,
     items: rows,
@@ -651,7 +653,7 @@ async function screenSongs(root, token) {
 
   const scroll = el("div", "tbl-scroll");
   const spacer = el("div", "tbl-spacer");
-  const layer = el("div");
+  const layer = el("div", "tbl-layer");
   scroll.append(spacer, layer);
   root.className = "page noscroll";
   root.append(tools, header, scroll);
@@ -1880,6 +1882,11 @@ const CHECK_HTML = `<span class="ic chk"><svg viewBox="0 0 24 24" fill="none" st
 
 function bootPopup() {
   document.body.classList.add("popup");
+  /* the pop-up window draws nothing but the surface: drop the main page DOM */
+  ["#app", "#npPage", "#onlinePanel", "#queueDrawer", "#miniPlayer", "#toasts"].forEach((sel) => {
+    const n = document.querySelector(sel);
+    if (n) n.remove();
+  });
   hydrateIcons(document);
   const layer = $("#popupLayer");
   const P = {
@@ -1903,8 +1910,15 @@ function bootPopup() {
   function post(cmd, args) { IPC.post({ id: 0, cmd, args: args || {} }); }
   function sendSize() {
     if (!P.surface) return;
-    const r = P.surface.getBoundingClientRect();
-    post("popup.size", { w: Math.ceil(r.width), h: Math.ceil(r.height) });
+    const lr = layer.getBoundingClientRect();
+    let w = P.surface.offsetWidth, h = P.surface.offsetHeight;
+    /* sub-menus hang outside the surface: measure the union */
+    [...layer.children].forEach((c) => {
+      const r = c.getBoundingClientRect();
+      w = Math.max(w, r.right - lr.left);
+      h = Math.max(h, r.bottom - lr.top);
+    });
+    post("popup.size", { w: Math.ceil(w), h: Math.ceil(h) });
   }
   /* which way the surface slides, away from the edge it is anchored to */
   function slideDir() {
@@ -2051,9 +2065,10 @@ function bootPopup() {
     const sub = el("div", "menu submenu pop-surface");
     (row._kids || []).forEach((it) => sub.appendChild(makeRow(it)));
     layer.appendChild(sub);
-    const ownerRect = row.getBoundingClientRect();
-    const layerRect = layer.getBoundingClientRect();
-    sub.style.marginTop = Math.max(0, ownerRect.top - layerRect.top) + "px";
+    const lr = layer.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    sub.style.left = Math.max(0, r.right - lr.left - 6) + "px";
+    sub.style.top = Math.max(0, r.top - lr.top - 4) + "px";
     row.classList.add("open-sub");
     P.subs.push({ el: sub, owner: row });
     requestAnimationFrame(sendSize);

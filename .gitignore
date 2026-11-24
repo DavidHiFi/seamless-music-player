@@ -1,3 +1,4 @@
 target/
 *.bak-*
 reports/*.png
+!reports/ui-*.png

@@ -541,6 +541,8 @@ img { -webkit-user-drag: none; user-select: none; }
 
 /* spacer keeps the row height inside the virtual scroll */
 .tbl-spacer { width: 100%; pointer-events: none; }
+/* the window of rendered rows sits on top of the spacer, moved by transform */
+.tbl-layer { position: absolute; top: 0; left: 0; right: 0; will-change: transform; }
 
 /* ---------- banner (artist, album, playlist) ---------- */
 .banner { display: flex; align-items: flex-end; gap: 24px; padding: 10px 0 6px; }
@@ -1227,6 +1229,7 @@ body.popup #miniPlayer, body.popup #toasts { display: none !important; }
   border-radius: 8px;
 }
 .popup-layer .menu.plist { min-width: 220px; }
+.popup-layer .menu.submenu { position: absolute; margin: 0; }
 
 .popup-layer .dialog { position: relative; border-radius: 8px; max-height: none; }
 .pdlg { width: 400px; padding: 12px 18px 16px; }
