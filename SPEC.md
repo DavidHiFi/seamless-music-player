@@ -89,7 +89,15 @@ body with no CSS blur and no fill of its own (the window is the glass), and expo
   (none when motion is off) then sends `popup.hidden`. Menus and lists close when the
   window loses focus or the main window moves; dialogs stay until closed and drag with
   `window.startDrag`. Other commands from a dialog are answered into the pop-up page.
-- Stay in the page: tooltips, toasts and anything nested inside a pop-up.
+- Toasts (added 2026-11-24, owner rule covers toasts too): one native acrylic window that
+  never takes focus, loading `index.html?toast=1`. Main page `toast()` sends
+  `toast.show {kind, title, text}`; Rust calls `window.__smpToast.add(payload)` in the
+  toast page (skipped when the main window is hidden or minimised). The toast page shows one
+  toast at a time (a new one replaces the old), measures it and sends `toast.size {w,h}`;
+  Rust centres it 116 px above the main window's bottom edge, shows it without activating,
+  then calls `shown()`. After about 3.4 s, or `clear()` (sent when the main window moves),
+  the page plays the close animation and sends `toast.hidden`.
+- Stay in the page: tooltips and anything nested inside a pop-up.
 
 Events: `player.state` (on change, plus 4 Hz position while playing), `viz` `{bars:[f32]}`,
 `library.changed`, `scan.progress` `{done,total}`, `online.results`, `download.progress`

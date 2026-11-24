@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 use tao::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use tao::event::{Event, StartCause, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
-use tao::platform::windows::WindowExtWindows;
+use tao::platform::windows::{WindowBuilderExtWindows, WindowExtWindows};
 use tao::window::{Icon, Window, WindowBuilder};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -47,7 +47,7 @@ use windows::Win32::System::ProcessStatus::{
     GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX,
 };
 use windows::Win32::System::Threading::{
-    CreateEventW, CreateMutexW, GetCurrentProcess, OpenEventW, SetEventW, WaitForSingleObject,
+    CreateEventW, CreateMutexW, GetCurrentProcess, OpenEventW, SetEvent, WaitForSingleObject,
     EVENT_MODIFY_STATE,
 };
 use windows::Win32::UI::Controls::MARGINS;
@@ -59,6 +59,7 @@ use wry::{WebView, WebViewBuilder, WebViewBuilderExtWindows};
 pub enum UserEvent {
     Ipc(String),
     PopupIpc(String),
+    ToastIpc(String),
     Emit(String),
     Tray(TrayIconEvent),
     Menu(MenuEvent),
@@ -114,7 +115,7 @@ pub struct App {
 
 /// The UI folder, embedded at build time. The UI helper owns its files; when
 /// index.html is not there yet the protocol serves a one-line placeholder.
-static UI_DIR: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/ui");
+static UI_DIR: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/ui");
 
 const UI_PLACEHOLDER: &str =
     "<!doctype html><html><head><meta charset=\"utf-8\"><title>Seamless Music Player</title></head><body style=\"background:#1E1E2E;color:#cdd6f4;font-family:monospace;padding:2em\">Seamless Music Player: the interface is not built yet.</body></html>";
@@ -351,7 +352,7 @@ fn dispatch(app: &App, id: u64, cmd: &str, args: &Value) -> Option<Result<Value,
             let path = arg("path").as_str().unwrap_or("").to_string();
             let idx: Vec<usize> = arg("indexes")
                 .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_usize()).collect())
+                .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
                 .unwrap_or_default();
             Some(app.lib.playlist_remove(&path, &idx))
         }
@@ -359,7 +360,7 @@ fn dispatch(app: &App, id: u64, cmd: &str, args: &Value) -> Option<Result<Value,
             let path = arg("path").as_str().unwrap_or("").to_string();
             let order: Vec<usize> = arg("order")
                 .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_usize()).collect())
+                .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
                 .unwrap_or_default();
             Some(app.lib.playlist_reorder(&path, &order))
         }
@@ -367,7 +368,7 @@ fn dispatch(app: &App, id: u64, cmd: &str, args: &Value) -> Option<Result<Value,
         // ---- player ----
         "player.play" => {
             let ids = resolve_play_source(app, args);
-            let start = arg("startIndex").as_usize().unwrap_or(0);
+            let start = arg("startIndex").as_u64().map(|n| n as usize).unwrap_or(0);
             Some(app.player.play(&ids, start))
         }
         "player.toggle" => Some(app.player.toggle()),
@@ -391,13 +392,13 @@ fn dispatch(app: &App, id: u64, cmd: &str, args: &Value) -> Option<Result<Value,
         "player.queueRemove" => {
             let idx: Vec<usize> = arg("indexes")
                 .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_usize()).collect())
+                .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
                 .unwrap_or_default();
             Some(app.player.queue_remove(&idx))
         }
         "player.queueMove" => {
-            let from = arg("from").as_usize().unwrap_or(0);
-            let to = arg("to").as_usize().unwrap_or(0);
+            let from = arg("from").as_u64().map(|n| n as usize).unwrap_or(0);
+            let to = arg("to").as_u64().map(|n| n as usize).unwrap_or(0);
             Some(app.player.queue_move(from, to))
         }
         "player.state" => Some(Ok(app.player.state_json())),
@@ -469,12 +470,12 @@ fn dispatch(app: &App, id: u64, cmd: &str, args: &Value) -> Option<Result<Value,
             if key.is_empty() {
                 return Some(Err("settings.set needs a key".into()));
             }
-            let known = app.settings.update(|s| {
-                let known = s.set_key(&key, value.clone());
-                known
+            let mut known = false;
+            let now = app.settings.update(|s| {
+                known = s.set_key(&key, value.clone());
             });
-            apply_setting_side_effects(app, &key, &known);
-            Some(Ok(json!({ "ok": true })))
+            apply_setting_side_effects(app, &key, &now);
+            Some(Ok(json!({ "ok": known })))
         }
         "devices.list" => Some(Ok(app.player.list_devices())),
         "devices.set" => {
@@ -697,7 +698,7 @@ fn close_requested(settings: &SettingsFile, window: &Window, webview: &WebView, 
 fn signal_running_copy() {
     unsafe {
         if let Ok(h) = OpenEventW(EVENT_MODIFY_STATE, false, w!("Local\\Smp.Show")) {
-            let _ = SetEventW(h);
+            let _ = SetEvent(h);
         }
     }
 }
@@ -705,8 +706,11 @@ fn signal_running_copy() {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--selftest") {
-        let code = selftest();
+        let code = selftest::run();
         std::process::exit(code);
+    }
+    if args.iter().any(|a| a == "--import-dry-run") {
+        std::process::exit(migrate::dry_run_cli());
     }
     let hidden_arg = args.iter().any(|a| a == "--hidden");
 
@@ -856,6 +860,40 @@ fn main() {
     let mut pending = popup::Pending::default();
     let mut popup_kind = String::new();
 
+    // The toast window: same glass, never takes focus, sits above the
+    // playback bar in the middle of the main window.
+    let toast_window = WindowBuilder::new()
+        .with_title("Seamless Music Player")
+        .with_decorations(false)
+        .with_transparent(true)
+        .with_visible(false)
+        .with_resizable(false)
+        .with_focused(false)
+        .with_inner_size(PhysicalSize::new(260u32, 60u32))
+        .with_skip_taskbar(true)
+        .with_owner_window(window.hwnd())
+        .with_undecorated_shadow(true)
+        .build(&event_loop)
+        .expect("toast window");
+    popup::make_no_activate(toast_window.hwnd());
+    popup::apply_acrylic(toast_window.hwnd(), popup::TINT);
+    let toast_ipc = event_loop.create_proxy();
+    let toast_view = WebViewBuilder::new_with_web_context(&mut ctx)
+        .with_url("smp://app/index.html?toast=1")
+        .with_transparent(true)
+        .with_devtools(false)
+        .with_default_context_menus(false)
+        .with_hotkeys_zoom(false)
+        .with_custom_protocol("smp".into(), move |_, req: Request<Vec<u8>>| {
+            serve_uri(req.uri().path())
+        })
+        .with_ipc_handler(move |req| {
+            let _ = toast_ipc.send_event(UserEvent::ToastIpc(req.into_body()));
+        })
+        .with_navigation_handler(move |url| url.starts_with("smp://"))
+        .build(&toast_window)
+        .expect("toast webview");
+
     let mut tray: Option<TrayIcon> = None;
     let item_show = MenuItem::with_id("show", "Show", true, None);
     let item_toggle = MenuItem::with_id("toggle", "Play", true, None);
@@ -883,6 +921,9 @@ fn main() {
     event_loop.run(move |event, _, cf| {
         *cf = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(1000));
         let _keep = &ctx;
+        // Bars are only worked out while someone can see them.
+        let seen = window.is_visible() && !window.is_minimized();
+        player.viz_visible.store(seen, std::sync::atomic::Ordering::Relaxed);
         match event {
             Event::NewEvents(StartCause::Init) => {
                 let menu = Menu::new();
@@ -998,6 +1039,16 @@ fn main() {
                         let _ = popup_view.evaluate_script("window.__smpPopup&&window.__smpPopup.hide()");
                         reply(&events, id, true, json!({ "ok": true }));
                     }
+                    "toast.show" => {
+                        // No toast over a hidden or minimised window.
+                        if window.is_visible() && !window.is_minimized() {
+                            let args = &v["args"];
+                            let _ = toast_view.evaluate_script(&format!(
+                                "window.__smpToast&&window.__smpToast.add({args})"
+                            ));
+                        }
+                        reply(&events, id, true, json!({ "ok": true }));
+                    }
                     _ => match dispatch(&app, id, &cmd, &v["args"]) {
                         Some(Ok(data)) => reply(&events, id, true, data),
                         Some(Err(e)) => reply(&events, id, false, Value::from(e)),
@@ -1063,6 +1114,30 @@ fn main() {
                     _ => {}
                 }
             }
+            Event::UserEvent(UserEvent::ToastIpc(msg)) => {
+                let v: Value = serde_json::from_str(&msg).unwrap_or(Value::Null);
+                let args = &v["args"];
+                match v["cmd"].as_str().unwrap_or("") {
+                    // The toast page measured itself: sit centred above the playback bar.
+                    "toast.size" => {
+                        let scale = window.scale_factor();
+                        let w = (args["w"].as_f64().unwrap_or(260.0) * scale).ceil() as i32;
+                        let h = (args["h"].as_f64().unwrap_or(60.0) * scale).ceil() as i32;
+                        let o = window.inner_position().map(|p| (p.x, p.y)).unwrap_or((0, 0));
+                        let s = window.inner_size();
+                        let x = o.0 + (s.width as i32 - w) / 2;
+                        let y = o.1 + s.height as i32 - h - (116.0 * scale).round() as i32;
+                        let _ = toast_view.set_bounds(wry::Rect {
+                            position: wry::dpi::PhysicalPosition::new(0, 0).into(),
+                            size: wry::dpi::PhysicalSize::new(w as u32, h as u32).into(),
+                        });
+                        popup::show_at_no_activate(toast_window.hwnd(), x, y, w, h);
+                        let _ = toast_view.evaluate_script("window.__smpToast&&window.__smpToast.shown()");
+                    }
+                    "toast.hidden" => popup::hide_window(toast_window.hwnd()),
+                    _ => {}
+                }
+            }
             Event::UserEvent(UserEvent::Emit(script)) => {
                 let _ = webview.evaluate_script(&script);
             }
@@ -1075,11 +1150,13 @@ fn main() {
                 }
             }
             Event::WindowEvent { window_id, .. } if window_id == popup_window.id() => {}
+            Event::WindowEvent { window_id, .. } if window_id == toast_window.id() => {}
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 close_requested(&settings, &window, &webview, cf, &mut tray, &player, false);
             }
             Event::WindowEvent { event: WindowEvent::Moved(_), .. } => {
                 rect_dirty = true;
+                let _ = toast_view.evaluate_script("window.__smpToast&&window.__smpToast.clear()");
                 if pending.open && popup_kind != "dialog" {
                     let _ = popup_view.evaluate_script("window.__smpPopup&&window.__smpPopup.hide()");
                 }

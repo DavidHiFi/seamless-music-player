@@ -62,6 +62,37 @@ pub fn apply_acrylic(hwnd: isize, tint: u32) {
     }
 }
 
+/// Toasts never take focus from the owner's game or the main window.
+pub fn make_no_activate(hwnd: isize) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    };
+    let h = HWND(hwnd as *mut c_void);
+    unsafe {
+        let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+        SetWindowLongPtrW(h, GWL_EXSTYLE, ex | (WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0) as isize);
+    }
+}
+
+/// Move, size and show a window without activating it.
+pub fn show_at_no_activate(hwnd: isize, x: i32, y: i32, w: i32, h: i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+    };
+    let hw = HWND(hwnd as *mut c_void);
+    unsafe {
+        let _ = SetWindowPos(hw, HWND_TOP, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+}
+
+/// Hide a window without touching focus.
+pub fn hide_window(hwnd: isize) {
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+    unsafe {
+        let _ = ShowWindow(HWND(hwnd as *mut c_void), SW_HIDE);
+    }
+}
+
 /// The work area (screen minus taskbar) of the monitor under a point.
 pub fn work_area(x: i32, y: i32) -> (i32, i32, i32, i32) {
     unsafe {

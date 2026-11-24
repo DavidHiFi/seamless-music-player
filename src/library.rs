@@ -89,6 +89,11 @@ impl Library {
 
     // ---- rows ----
 
+    /// The same row as a rusqlite mapper.
+    fn track_row(row: &Row) -> rusqlite::Result<Value> {
+        Ok(Self::row_to_track(row))
+    }
+
     pub fn row_to_track(row: &Row) -> Value {
         let artists: Value =
             serde_json::from_str(&row.get::<_, String>("artists").unwrap_or_default()).unwrap_or(json!([]));
@@ -146,8 +151,11 @@ impl Library {
         let mut all: Vec<&dyn rusqlite::ToSql> = p.to_vec();
         all.push(&limit);
         all.push(&offset);
-        let rows = st.query_map(all.as_slice(), Self::row_to_track).unwrap_or_else(|_| panic!("tracks query"));
-        (total, rows.filter_map(|r| r.ok()).collect())
+        let rows: Vec<Value> = match st.query_map(all.as_slice(), Self::track_row) {
+            Ok(r) => r.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        };
+        (total, rows)
     }
 
     pub fn track_by_id(&self, id: i64) -> Option<Value> {
@@ -155,7 +163,7 @@ impl Library {
         let mut st = conn
             .prepare(&format!("SELECT {} FROM tracks WHERE id = ?1", Self::TRACK_COLS))
             .ok()?;
-        st.query_row(params![id], Self::row_to_track).ok()
+        st.query_row(params![id], Self::track_row).ok()
     }
 
     pub fn tracks_by_ids(&self, ids: &[i64]) -> Vec<Value> {
@@ -163,7 +171,7 @@ impl Library {
         let mut out = Vec::new();
         for id in ids {
             if let Ok(mut st) = conn.prepare(&format!("SELECT {} FROM tracks WHERE id = ?1", Self::TRACK_COLS)) {
-                if let Ok(v) = st.query_row(params![id], Self::row_to_track) {
+                if let Ok(v) = st.query_row(params![id], Self::track_row) {
                     out.push(v);
                 }
             }
@@ -177,8 +185,8 @@ impl Library {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        let rows = st.query_map(p, |r| r.get::<_, i64>(0)).unwrap_or_else(|_| panic!("ids"));
-        rows.filter_map(|r| r.ok()).collect()
+        let rows = st.query_map(p, |r| r.get::<_, i64>(0)).map(|it| it.collect::<Vec<_>>()).unwrap_or_default();
+        rows.into_iter().filter_map(|r| r.ok()).collect()
     }
 
     // ---- overview / listing ----
@@ -205,9 +213,9 @@ impl Library {
             Ok(s) => s,
             Err(_) => return HashMap::new(),
         };
-        let rows = st.query_map([], |r| r.get::<_, String>(0)).unwrap_or_else(|_| panic!("distinct"));
+        let rows = st.query_map([], |r| r.get::<_, String>(0)).map(|it| it.collect::<Vec<_>>()).unwrap_or_default();
         let mut counts: HashMap<String, i64> = HashMap::new();
-        for row in rows.flatten() {
+        for row in rows.into_iter().flatten() {
             if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(&row) {
                 for v in arr {
                     if let Some(name) = v.as_str() {
@@ -295,7 +303,7 @@ impl Library {
                 let total: f64 = r.get("total").unwrap_or(0.0);
                 let aa: String = r.get("album_artists").unwrap_or_default();
                 let added: Option<i64> = r.get("date_added").unwrap_or(None);
-                json!({
+                Ok(json!({
                     "albumKey": key,
                     "name": album,
                     "year": year,
@@ -304,10 +312,10 @@ impl Library {
                     "duration": total,
                     "artists": serde_json::from_str::<Value>(&aa).unwrap_or(json!([])),
                     "dateAdded": added,
-                })
+                }))
             })
-            .unwrap_or_else(|_| panic!("albums"));
-        let mut items: Vec<Value> = rows.filter_map(|r| r.ok()).collect();
+            .map(|it| it.collect::<Vec<_>>()).unwrap_or_default();
+        let mut items: Vec<Value> = rows.into_iter().filter_map(|r| r.ok()).collect();
         items
     }
 
@@ -347,9 +355,9 @@ impl Library {
             .query_map([], |r| {
                 Ok((r.get::<_, String>(0).unwrap_or_default(), r.get::<_, String>(1).unwrap_or_default()))
             })
-            .unwrap_or_else(|_| panic!("artist rows"));
+            .map(|it| it.collect::<Vec<_>>()).unwrap_or_default();
         let mut albums_per: HashMap<String, HashSet<String>> = HashMap::new();
-        for row in rows.flatten() {
+        for row in rows.into_iter().flatten() {
             if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(&row.0) {
                 for v in arr {
                     if let Some(name) = v.as_str() {
@@ -443,10 +451,10 @@ impl Library {
         };
         let rows = st
             .query_map([], |r| {
-                json!({ "id": r.get::<_, i64>(0).unwrap_or(0), "path": r.get::<_, String>(1).unwrap_or_default() })
+                Ok(json!({ "id": r.get::<_, i64>(0).unwrap_or(0), "path": r.get::<_, String>(1).unwrap_or_default() }))
             })
-            .unwrap_or_else(|_| panic!("folders"));
-        let items: Vec<Value> = rows.filter_map(|r| r.ok()).collect();
+            .map(|it| it.collect::<Vec<_>>()).unwrap_or_default();
+        let items: Vec<Value> = rows.into_iter().filter_map(|r| r.ok()).collect();
         json!(items)
     }
 
@@ -645,8 +653,9 @@ impl Library {
             .iter()
             .map(|p| {
                 let name = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                let dir = p.parent().map(|d| d.to_path_buf()).unwrap_or_default();
                 let count = std::fs::read_to_string(p)
-                    .map(|body| logic::read_m3u(&body).len())
+                    .map(|body| logic::read_m3u(&body, &dir).len())
                     .unwrap_or(0);
                 json!({
                     "path": p.to_string_lossy(),
@@ -663,18 +672,40 @@ impl Library {
             return json!({ "items": [], "missing": 0 });
         };
         let body = std::fs::read_to_string(&file).unwrap_or_default();
-        let entries = logic::read_m3u(&body);
         let playlist_dir = file.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        let entries = logic::read_m3u(&body, &playlist_dir);
         let mut items = Vec::new();
         let mut missing = 0i64;
         for e in entries {
-            let resolved = resolve_playlist_path(&e.path, &playlist_dir);
-            match self.track_by_path(&resolved) {
+            match self.track_by_path(&e.full_path) {
                 Some(t) => items.push(t),
                 None => missing += 1,
             }
         }
         json!({ "items": items, "missing": missing })
+    }
+
+    /// The playlist's entries as written in the file, so a rewrite keeps
+    /// relative paths relative.
+    fn playlist_lines(&self, file: &Path) -> Vec<String> {
+        let dir = file.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+        logic::read_m3u(&std::fs::read_to_string(file).unwrap_or_default(), &dir)
+            .into_iter()
+            .map(|e| e.raw_path)
+            .collect()
+    }
+
+    pub fn album_track_ids(&self, album_key: &str) -> Vec<i64> {
+        self.ids_by_where("WHERE album_key = ?1", &[&album_key], "disc_no, track_no, title COLLATE NOCASE")
+    }
+
+    pub fn artist_track_ids(&self, name: &str) -> Vec<i64> {
+        let pat = format!("%{}%", serde_json::to_string(name).unwrap_or_default());
+        self.ids_by_where(
+            "WHERE artists LIKE ?1 OR album_artists LIKE ?1",
+            &[&pat],
+            "album COLLATE NOCASE, disc_no, track_no",
+        )
     }
 
     pub fn playlist_track_ids(&self, path: &str) -> Vec<i64> {
@@ -692,7 +723,7 @@ impl Library {
         let mut st = conn
             .prepare(&format!("SELECT {} FROM tracks WHERE path = ?1 COLLATE NOCASE", Self::TRACK_COLS))
             .ok()?;
-        st.query_row(params![path], Self::row_to_track).ok()
+        st.query_row(params![path], Self::track_row).ok()
     }
 
     pub fn playlist_create(&self, name: &str) -> Result<Value, String> {
@@ -727,18 +758,10 @@ impl Library {
 
     pub fn playlist_add(&self, path: &str, ids: &[i64]) -> Result<Value, String> {
         let Some(file) = self.playlist_file(path) else { return Err("playlist not found".into()) };
-        let mut entries = logic::read_m3u(&std::fs::read_to_string(&file).unwrap_or_default());
+        let mut entries = self.playlist_lines(&file);
         for id in ids {
             if let Some(t) = self.track_by_id(*id) {
-                entries.push(logic::M3uEntry {
-                    path: t["path"].as_str().unwrap_or_default().to_string(),
-                    title: Some(format!(
-                        "{} - {}",
-                        t["artists"][0].as_str().unwrap_or(""),
-                        t["title"].as_str().unwrap_or("")
-                    )),
-                    seconds: Some(t["duration"].as_f64().unwrap_or(0.0).round() as i64),
-                });
+                entries.push(t["path"].as_str().unwrap_or_default().to_string());
             }
         }
         std::fs::write(&file, logic::write_m3u(&entries)).map_err(|e| e.to_string())?;
@@ -748,7 +771,7 @@ impl Library {
 
     pub fn playlist_remove(&self, path: &str, indexes: &[usize]) -> Result<Value, String> {
         let Some(file) = self.playlist_file(path) else { return Err("playlist not found".into()) };
-        let mut entries = logic::read_m3u(&std::fs::read_to_string(&file).unwrap_or_default());
+        let mut entries = self.playlist_lines(&file);
         let mut idx: Vec<usize> = indexes.to_vec();
         idx.sort_unstable();
         idx.dedup();
@@ -764,7 +787,7 @@ impl Library {
 
     pub fn playlist_reorder(&self, path: &str, order: &[usize]) -> Result<Value, String> {
         let Some(file) = self.playlist_file(path) else { return Err("playlist not found".into()) };
-        let entries = logic::read_m3u(&std::fs::read_to_string(&file).unwrap_or_default());
+        let entries = self.playlist_lines(&file);
         if order.len() != entries.len() {
             return Err("reorder needs every index once".into());
         }
@@ -799,10 +822,10 @@ impl Library {
             };
             let rows = st
                 .query_map([], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+                    Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))
                 })
-                .unwrap_or_else(|_| panic!("existing"));
-            rows.filter_map(|r| r.ok()).collect()
+                .map(|it| it.collect::<Vec<_>>()).unwrap_or_default();
+            rows.into_iter().filter_map(|r| r.ok()).collect()
         };
         let mut done = 0i64;
         let mut seen: HashSet<String> = HashSet::new();
@@ -903,7 +926,6 @@ impl Library {
         std::thread::Builder::new()
             .name("watcher".into())
             .spawn(move || {
-                use notify::Watcher as _;
                 let (ev_tx, ev_rx) = std::sync::mpsc::channel();
                 let mut debouncer =
                     match notify_debouncer_full::new_debouncer(Duration::from_millis(800), None, ev_tx) {
@@ -911,9 +933,8 @@ impl Library {
                         Err(_) => return,
                     };
                 {
-                    let watcher = debouncer.watcher();
                     for folder in lib.folders_paths() {
-                        let _ = watcher.watch(Path::new(&folder), notify::RecursiveMode::Recursive);
+                        let _ = debouncer.watch(Path::new(&folder), notify::RecursiveMode::Recursive);
                     }
                     loop {
                         match ev_rx.recv_timeout(Duration::from_millis(200)) {
@@ -933,12 +954,10 @@ impl Library {
                         while let Ok(cmd) = cmd_rx.try_recv() {
                             match cmd {
                                 WatcherCmd::Add(p) => {
-                                    let _ = debouncer
-                                        .watcher()
-                                        .watch(Path::new(&p), notify::RecursiveMode::Recursive);
+                                    let _ = debouncer.watch(Path::new(&p), notify::RecursiveMode::Recursive);
                                 }
                                 WatcherCmd::Remove(p) => {
-                                    let _ = debouncer.watcher().unwatch(Path::new(&p));
+                                    let _ = debouncer.unwatch(Path::new(&p));
                                 }
                             }
                         }
@@ -955,7 +974,7 @@ pub enum WatcherCmd {
     Remove(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq)]
 struct FileMeta {
     title: String,
     artists_json: String,
@@ -994,6 +1013,7 @@ impl Default for FileMeta {
 
 /// Read tags with lofty and produce the row values.
 pub fn read_tags(path: &Path) -> FileMeta {
+    use lofty::prelude::*;
     let mut meta = FileMeta::default();
     let name_title = path
         .file_stem()
@@ -1004,7 +1024,7 @@ pub fn read_tags(path: &Path) -> FileMeta {
         return meta;
     };
     let props = tagged.properties();
-    meta.duration = props.duration().map(|d| d.as_secs_f64()).unwrap_or(0.0);
+    meta.duration = props.duration().as_secs_f64();
     meta.bitrate = props.audio_bitrate().unwrap_or(0) as i64;
     meta.sample_rate = props.sample_rate().unwrap_or(0) as i64;
     let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
@@ -1019,16 +1039,16 @@ pub fn read_tags(path: &Path) -> FileMeta {
             serde_json::to_string(&parts).unwrap_or_else(|_| "[]".into())
         };
         if let Some(a) = tag.artist() {
-            meta.artists_json = split(a, false);
+            meta.artists_json = split(&a, false);
         }
-        if let Some(a) = tag.album_artist() {
+        if let Some(a) = tag.get_string(&lofty::tag::ItemKey::AlbumArtist) {
             meta.album_artists_json = split(a, false);
         }
         if let Some(a) = tag.album() {
             meta.album = a.to_string();
         }
         if let Some(g) = tag.genre() {
-            meta.genres_json = split(g, true);
+            meta.genres_json = split(&g, true);
         }
         meta.year = tag.year().map(|y| y as i64);
         meta.track_no = tag.track().and_then(|t| t.try_into().ok()).map(|t: u32| t as i64);
@@ -1095,15 +1115,6 @@ fn sanitize_playlist_name(name: &str) -> String {
         .to_string()
 }
 
-/// Join a playlist entry onto the playlist folder when it is relative.
-fn resolve_playlist_path(entry: &str, playlist_dir: &Path) -> String {
-    let p = Path::new(entry);
-    if p.is_absolute() {
-        entry.to_string()
-    } else {
-        playlist_dir.join(p).to_string_lossy().to_string()
-    }
-}
 
 /// Move a file to the Recycle Bin.
 pub fn recycle_file(path: &Path) -> Result<(), String> {
@@ -1121,7 +1132,7 @@ pub fn recycle_file(path: &Path) -> Result<(), String> {
         wFunc: FO_DELETE,
         pFrom: windows::core::PCWSTR(wide.as_ptr()),
         pTo: windows::core::PCWSTR::null(),
-        fFlags: FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT,
+        fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT).0 as u16,
         ..Default::default()
     };
     let code = unsafe { SHFileOperationW(&mut op) };
