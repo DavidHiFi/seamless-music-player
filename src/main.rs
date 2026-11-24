@@ -10,6 +10,7 @@ mod library;
 mod logic;
 mod lyrics;
 mod migrate;
+mod net;
 mod online;
 mod player;
 mod popup;
@@ -746,7 +747,7 @@ fn main() {
         smtc: Mutex::new(smtc),
         discord: Mutex::new(discord::Discord::new(discord_on)),
         scrobbler: Scrobbler::new(),
-        online: Arc::new(Online::new()),
+        online: Arc::new(Online::new(Arc::clone(&events), Arc::clone(&settings))),
         watcher,
     });
 
