@@ -205,20 +205,25 @@ impl Player {
         if let Some(path) = self.track_path(id) {
             self.engine.play(Path::new(&path), seek);
         }
+        if st.playing {
+            if let Some(t) = &st.track {
+                crate::scrobble::now_playing(t);
+            }
+        }
     }
 
     /// Play and skip counts: a play at half the track or four minutes,
     /// whichever comes first; a skip when a track is left before that.
     fn count_leaving(&self, id: Option<i64>, elapsed: f64) {
         let Some(id) = id else { return };
-        let dur = self
-            .lib
-            .track_by_id(id)
-            .and_then(|t| t["duration"].as_f64())
-            .unwrap_or(0.0);
+        let track = self.lib.track_by_id(id);
+        let dur = track.as_ref().and_then(|t| t["duration"].as_f64()).unwrap_or(0.0);
         let threshold = if dur > 0.0 { (dur / 2.0).min(240.0) } else { 240.0 };
         if elapsed >= threshold {
             self.lib.record_play(id);
+            if let Some(t) = &track {
+                crate::scrobble::played(t, elapsed);
+            }
         } else if elapsed >= 1.0 {
             self.lib.record_skip(id);
         }
@@ -616,6 +621,9 @@ fn ticker_loop(p: Arc<Player>) {
         while let Ok(ev) = p.engine.events.lock().unwrap().try_recv() {
             match ev {
                 crate::audio::engine::EngineEv::Switched { duration, crossfaded: _, .. } => {
+                    // The track that just finished played to its end.
+                    let prev = p.state.lock().unwrap().track_id;
+                    p.count_leaving(prev, f64::MAX);
                     let mut st = p.state.lock().unwrap();
                     if let Some(next) = *p.next_id.lock().unwrap() {
                         st.index = (st.index + 1).min(st.queue.len().saturating_sub(1));
@@ -624,6 +632,9 @@ fn ticker_loop(p: Arc<Player>) {
                     }
                     st.duration = duration;
                     st.position = 0.0;
+                    if let Some(t) = &st.track {
+                        crate::scrobble::now_playing(t);
+                    }
                     drop(st);
                     p.refresh_next();
                     p.push_state();
@@ -781,7 +792,7 @@ mod tests {
     #[test]
     fn count_thresholds_use_half_or_four_minutes() {
         // Exercised through Player below; here the maths is checked plain.
-        for dur in [30.0, 240.0, 600.0] {
+        for dur in [30.0f64, 240.0, 600.0] {
             let t = (dur / 2.0).min(240.0);
             assert!(t > 0.0 && t <= 240.0);
         }

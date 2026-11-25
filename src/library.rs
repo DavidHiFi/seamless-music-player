@@ -242,20 +242,24 @@ impl Library {
         self.collect_distinct(col).len() as i64
     }
 
-    /// The sort ORDER BY for the songs table.
-    fn track_order(sort: &str) -> &'static str {
-        match sort {
-            "artist" => "artists COLLATE NOCASE, album COLLATE NOCASE, disc_no, track_no, title COLLATE NOCASE",
-            "album" => "album COLLATE NOCASE, disc_no, track_no, title COLLATE NOCASE",
-            "year" => "year, album COLLATE NOCASE, disc_no, track_no",
-            "dateAdded" => "date_added DESC, id DESC",
-            "datePlayed" => "last_played DESC",
-            "rating" => "rating DESC, title COLLATE NOCASE",
-            "playCount" => "play_count DESC",
-            "duration" => "duration",
-            "path" => "path COLLATE NOCASE",
-            _ => "title COLLATE NOCASE, album COLLATE NOCASE, disc_no, track_no",
-        }
+    /// The sort ORDER BY for the songs table. `sort` is a key, optionally with
+    /// `:desc` on the end to turn the main column round (ties keep their order).
+    fn track_order(sort: &str) -> String {
+        let (key, dir) = sort.split_once(':').unwrap_or((sort, "asc"));
+        let (main, main_desc, rest) = match key {
+            "artist" => ("artists COLLATE NOCASE", false, "album COLLATE NOCASE, disc_no, track_no, title COLLATE NOCASE"),
+            "album" => ("album COLLATE NOCASE", false, "disc_no, track_no, title COLLATE NOCASE"),
+            "year" => ("year", false, "album COLLATE NOCASE, disc_no, track_no"),
+            "dateAdded" => ("date_added", true, "id DESC"),
+            "datePlayed" => ("last_played", true, "id DESC"),
+            "rating" => ("rating", true, "title COLLATE NOCASE"),
+            "playCount" => ("play_count", true, "title COLLATE NOCASE"),
+            "duration" => ("duration", false, "title COLLATE NOCASE"),
+            "path" => ("path COLLATE NOCASE", false, "id"),
+            _ => ("title COLLATE NOCASE", false, "album COLLATE NOCASE, disc_no, track_no"),
+        };
+        let desc = main_desc != (dir == "desc");
+        format!("{main}{}, {rest}", if desc { " DESC" } else { "" })
     }
 
     pub fn tracks(&self, sort: &str, filter: Option<&str>, offset: i64, limit: i64) -> Value {
@@ -265,12 +269,12 @@ impl Library {
                 self.query_tracks(
                     "WHERE title LIKE ?1 OR artists LIKE ?1 OR album LIKE ?1 OR genres LIKE ?1",
                     &[&like],
-                    Self::track_order(sort),
+                    &Self::track_order(sort),
                     offset,
                     limit,
                 )
             }
-            _ => self.query_tracks("", &[], Self::track_order(sort), offset, limit),
+            _ => self.query_tracks("", &[], &Self::track_order(sort), offset, limit),
         };
         json!({ "total": total, "items": items })
     }

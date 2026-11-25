@@ -50,15 +50,30 @@
   --dur-close: 120ms;
 }
 
+:root[data-speed="veryquick"] { --dur-open: 80ms;  --dur-close: 60ms; }
+:root[data-speed="quick"]     { --dur-open: 120ms; --dur-close: 90ms; }
+:root[data-speed="relaxed"]   { --dur-open: 240ms; --dur-close: 180ms; }
+:root[data-speed="slow"]      { --dur-open: 320ms; --dur-close: 240ms; }
+
 :root[data-motion="off"] {
   --dur-open: 0ms;
   --dur-close: 0ms;
 }
 
-:root[data-speed="veryquick"] { --dur-open: 80ms;  --dur-close: 60ms; }
-:root[data-speed="quick"]     { --dur-open: 120ms; --dur-close: 90ms; }
-:root[data-speed="relaxed"]   { --dur-open: 240ms; --dur-close: 180ms; }
-:root[data-speed="slow"]      { --dur-open: 320ms; --dur-close: 240ms; }
+/* Each surface's own switch under "Open and close animation". */
+:root[data-still~="toasts"] .toast,
+:root[data-still~="menus"] .menu,
+:root[data-still~="dialogs"] .dialog,
+:root[data-still~="panels"] .online, :root[data-still~="panels"] .online-underlay,
+:root[data-still~="panels"] .drawer, :root[data-still~="panels"] .drawer-underlay,
+:root[data-still~="panels"] .np-page, :root[data-still~="panels"] .mini,
+:root[data-still~="pages"] .page {
+  --dur-open: 0ms;
+  --dur-close: 0ms;
+}
+:root[data-still~="pages"] .page-anim { animation: none; }
+:root[data-still~="tooltips"] [data-tip]:hover::after,
+:root[data-motion="off"] [data-tip]:hover::after { animation: none; }
 
 /* ---------- base ---------- */
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -496,7 +511,9 @@ img { -webkit-user-drag: none; user-select: none; }
 .tbl-head .sort { color: var(--blue); }
 .tbl-head .arrow { font-size: 9px; }
 
-.tbl-scroll { flex: 1; min-height: 0; overflow-y: auto; position: relative; }
+/* both reserve the scrollbar's room so the header lines up with the rows */
+.tbl-head { overflow: hidden; scrollbar-gutter: stable; }
+.tbl-scroll { flex: 1; min-height: 0; overflow-y: auto; position: relative; scrollbar-gutter: stable; }
 
 .tbl-row {
   display: flex;
@@ -534,8 +551,10 @@ img { -webkit-user-drag: none; user-select: none; }
 .tbl-row .art-mini { width: 22px; height: 22px; border-radius: 4px; object-fit: cover; background: var(--s0); flex: none; }
 .tbl-row.playing .c-title { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .tbl-row.playing .c-num { color: var(--blue); }
-.tbl-row .c-num, .tbl-row .c-dur, .tbl-row .c-rate, .tbl-row .c-plays { flex: 0 0 52px; justify-content: flex-end; }
-.tbl-row .c-love { flex: 0 0 30px; justify-content: center; }
+.tbl-row .c-num, .tbl-row .c-dur, .tbl-row .c-plays,
+.tbl-head .c-num, .tbl-head .c-dur, .tbl-head .c-plays { flex: 0 0 52px; justify-content: flex-end; }
+.tbl-row .c-rate, .tbl-head .c-rate { flex: 0 0 84px; justify-content: flex-end; }
+.tbl-row .c-love, .tbl-head .c-love { flex: 0 0 56px; justify-content: center; }
 .tbl-row .c-love .badge-love { width: 12px; height: 12px; }
 .tbl-row .c-colon { flex: 0 0 34px; justify-content: center; color: var(--ov1); }
 
@@ -1282,3 +1301,28 @@ body.popup #miniPlayer, body.popup #toasts { display: none !important; }
   .tbl-row .c-rate, .tbl-row .c-plays, .tbl-row .c-album { display: none; }
   .tbl-head .c-rate, .tbl-head .c-plays, .tbl-head .c-album { display: none; }
 }
+
+/* While the main window fades in or out it is layered, so the glass is off for
+   that moment: a solid base keeps it from flashing see-through. */
+:root.win-moving, :root.win-moving body { background: #1e1e2e; }
+
+/* ---------- artwork switched off ---------- */
+:root[data-noart] .r-art, :root[data-noart] .tbl-row .art-mini { display: none; }
+
+/* ---------- toast window page (?toast=1) ----------
+   The native window is the glass. The box sits at the top left and the window
+   is sized to it, so nothing here is fixed or centred. */
+body.toastpage { background: transparent; overflow: hidden; }
+body.toastpage #toasts {
+  display: flex !important;
+  position: static; transform: none;
+  flex-direction: column; gap: 8px;
+  padding: 0; width: max-content;
+  align-items: stretch;
+}
+body.toastpage .toast {
+  width: 260px; max-width: none;
+  border-radius: 8px;
+  background: rgba(24, 24, 37, 0.55);
+}
+body.toastpage .toast.pre { opacity: 0; }

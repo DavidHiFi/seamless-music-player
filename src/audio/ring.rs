@@ -123,10 +123,10 @@ mod tests {
         let mut out = vec![0.0f32; 300 * 2];
         assert_eq!(r.read(&mut out), 300);
         assert_eq!(out[0], 0.0);
-        assert_eq!(out[599], 299.0 * 0.001);
+        assert_eq!(out[599], src[599]);
         let mut out2 = vec![0.0f32; 300 * 2];
         assert_eq!(r.read(&mut out2), 200);
-        assert_eq!(out2[399], 499.0 * 0.001);
+        assert_eq!(out2[399], src[999]);
         assert_eq!(r.used_frames(), 0);
     }
 
@@ -147,6 +147,8 @@ mod tests {
         let big = vec![1.0f32; 1000 * 2];
         let w1 = r.write(&big);
         let w2 = r.write(&big);
-        assert!(w1 + w2 <= 63);
+        // The cursors only ever grow, so every slot is usable: exactly full.
+        assert_eq!(w1 + w2, 64);
+        assert_eq!(r.free_frames(), 0);
     }
 }

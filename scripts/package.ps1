@@ -1,6 +1,6 @@
 <#
 Packages the built Seamless Music Player into the release zip the deps script installs from.
-Reads the version from Cargo.toml unless -Version is given, copies target\release\seamless-music-player.exe
+Reads the version from Cargo.toml unless -Version is given, copies target\release\smp.exe
 across as 'Seamless Music Player.exe' (plus LICENSE when the repo has one), zips that to
 dist\SeamlessMusicPlayer-<v>-win64.zip and writes dist\SHA256SUMS. It never builds.
 #>
@@ -17,7 +17,7 @@ if (-not $Version) {
     if (-not $Version) { throw 'Cargo.toml has no version = "..." line.' }
 }
 
-$exe = Join-Path $repo 'target\release\seamless-music-player.exe'
+$exe = Join-Path $repo 'target\release\smp.exe'
 if (-not (Test-Path $exe)) { throw "No built exe at $exe. Run cargo build --release first; this script never builds." }
 
 $dist = Join-Path $repo 'dist'

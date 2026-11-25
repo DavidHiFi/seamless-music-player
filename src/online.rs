@@ -174,7 +174,11 @@ impl Online {
         if query.chars().count() < MIN_QUERY_LEN {
             return;
         }
-        {
+        let (use_peers, use_youtube) = {
+            let s = self.settings.settings.lock().unwrap();
+            (s.page_flag("online", "slskd", true), s.page_flag("online", "youtube", true))
+        };
+        if use_peers {
             let inner = Arc::clone(&self.inner);
             let events = Arc::clone(&self.events);
             let slskd = net::Slskd::new();
@@ -184,7 +188,7 @@ impl Online {
                 peers_loop(inner, events, slskd, &q2, run, epoch);
             }).ok();
         }
-        {
+        if use_youtube {
             let inner = Arc::clone(&self.inner);
             let events = Arc::clone(&self.events);
             let run = Arc::clone(&self.run);

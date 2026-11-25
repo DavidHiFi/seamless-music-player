@@ -131,6 +131,7 @@ const artSrc = (id) => (id ? (window.__ART_BASE || new URL("/art/", location.hre
 
 /* pop-up window plumbing: token -> {onPick, onClose} while a pop-up is open */
 const POPUP_MODE = new URLSearchParams(location.search).has("popup");
+const TOAST_MODE = new URLSearchParams(location.search).has("toast");
 const popupWaiters = new Map();
 let popupSeq = 0, popupTokenNow = null;
 
@@ -158,32 +159,48 @@ const S = {
 };
 
 /* ---------- toasts ---------- */
+/* Toasts open in their own glass window above the playback bar. The toast
+   page cannot read settings, so the motion it should use travels with each one. */
 function toast(kind, title, text) {
-  const box = $("#toasts");
-  const t = el("div", "toast pop-panel anim-in-top" + (kind === "error" ? " error" : kind === "warn" ? " warn" : ""));
-  t.innerHTML = `${icon(kind === "error" ? "warning" : kind === "warn" ? "warning" : "check")}<div><b>${esc(title)}</b><p>${esc(text || "")}</p></div>`;
-  box.appendChild(t);
-  while (box.children.length > 3) box.removeChild(box.firstChild);
-  setTimeout(() => closePop(t, "anim-out-top", true), 3400);
+  const r = document.documentElement;
+  const still = (r.dataset.still || "").split(" ").includes("toasts");
+  const motion = { on: r.dataset.motion !== "off" && !still, speed: r.dataset.speed || "normal" };
+  IPC.call("toast.show", { kind: kind || "ok", title: String(title || ""), text: String(text || ""), motion }).catch(() => {});
+}
+function toastNode(kind, title, text) {
+  const t = el("div", "toast pop-surface" + (kind === "error" ? " error" : kind === "warn" ? " warn" : ""));
+  t.innerHTML = `${icon(kind === "error" || kind === "warn" ? "warning" : "check")}<div><b>${esc(title)}</b><p>${esc(text || "")}</p></div>`;
+  return t;
+}
+function readDur(node, name) {
+  const raw = getComputedStyle(node || document.documentElement).getPropertyValue(name) || "0ms";
+  const n = parseInt(raw, 10);
+  return isFinite(n) && n > 0 ? n : 0;
 }
 
 /* ---------- open and close motion for pop-ups ---------- */
 function openPop(node, anim) {
   node.classList.remove("hidden", "closing");
   node.classList.remove("anim-in-top", "anim-in-right", "anim-in-centre");
-  if (S.settings && S.settings.motion && S.settings.motion.enabled !== false) {
+  node.classList.remove("anim-out-top", "anim-out-right", "anim-out-centre");
+  clearTimeout(node._closeT);
+  if (readDur(node, "--dur-open") > 0) {
     void node.offsetWidth;
     node.classList.add("anim-in-" + anim);
   }
 }
 function closePop(node, anim, remove) {
-  if (node.classList.contains("hidden")) return;
-  const finish = () => { if (remove) node.remove(); else node.classList.add("hidden"); node.classList.remove("closing"); };
-  if (S.settings && S.settings.motion && S.settings.motion.enabled !== false) {
+  if (node.classList.contains("hidden") || node.classList.contains("closing")) return;
+  const finish = () => {
+    if (remove) node.remove(); else node.classList.add("hidden");
+    node.classList.remove("closing", "anim-out-" + anim);
+  };
+  const dur = readDur(node, "--dur-close");
+  if (dur > 0) {
     node.classList.add("closing");
     node.classList.remove("anim-in-top", "anim-in-right", "anim-in-centre");
     node.classList.add("anim-out-" + anim);
-    setTimeout(finish, 160);
+    node._closeT = setTimeout(finish, dur + 20);
   } else finish();
 }
 
@@ -200,6 +217,7 @@ function popupOpen(kind, opts) {
     title: opts.title,
     items: opts.items,
     body: opts.body,
+    motion: { on: document.documentElement.dataset.motion !== "off", speed: document.documentElement.dataset.speed || "normal", still: document.documentElement.dataset.still || "" },
   });
 }
 function popupClose() {
@@ -298,7 +316,10 @@ function trackRow(t, opts) {
     r.appendChild(lv);
   }
   r.classList.toggle("playing", S.player.track && S.player.track.id === t.id);
-  r.addEventListener("dblclick", () => playFromList(opts.listIds || [t.id], (opts.listIds || [t.id]).indexOf(t.id)));
+  r.addEventListener("dblclick", () => {
+    if (enqueueByDefault()) { addToQueue([t.id]); return; }
+    playFromList(opts.listIds || [t.id], (opts.listIds || [t.id]).indexOf(t.id));
+  });
   r.addEventListener("contextmenu", (e) => { e.preventDefault(); trackMenu([t.id], e.clientX, e.clientY, opts.ctx); });
   return r;
 }
@@ -407,8 +428,17 @@ function applySettings() {
   r.style.setProperty("--enh-font-weight", String(ap.fontWeight || 500));
   r.style.setProperty("--blur", (ap.blur || 22) + "px");
   const mo = st.motion || {};
-  r.dataset.motion = mo.enabled === false ? "off" : "on";
-  r.dataset.speed = mo.speed && mo.speed !== "normal" ? mo.speed : "";
+  const g = st._motion || {};
+  const LEVELS = ["veryquick", "quick", "normal", "relaxed", "slow"];
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const on = mo.enabled !== false && g.globalOn !== false && g.systemOn !== false && !reduced;
+  const speed = LEVELS.includes(mo.speed) ? mo.speed : (LEVELS.includes(g.globalSpeed) ? g.globalSpeed : "normal");
+  r.dataset.motion = on ? "on" : "off";
+  r.dataset.speed = speed !== "normal" ? speed : "";
+  const surf = mo.surfaces || {};
+  r.dataset.still = Object.keys(surf).filter((k) => surf[k] === false).join(" ");
+  const be = st.behaviour || {};
+  if (be.showArtwork === false) r.dataset.noart = "1"; else delete r.dataset.noart;
 }
 
 /* ---------- tabs and router ---------- */
@@ -448,6 +478,11 @@ function goBack() {
 function renderPage() {
   const root = $("#page");
   root.className = "page";
+  if (S.animPage !== S.page) {
+    S.animPage = S.page;
+    void root.offsetWidth;
+    root.className = "page page-anim";
+  }
   root.innerHTML = "";
   const token = S.renderToken;
   const fn = {
@@ -634,10 +669,12 @@ async function screenSongs(root, token) {
     const d = el("div");
     if (c === "art") { d.innerHTML = "&nbsp;"; d.style.flex = "0 0 34px"; }
     else {
-      const key = { num: "title", artist: "artist", album: "album", genres: "title", year: "year", dur: "duration", rating: "rating", plays: "playCount", love: "title", title: "title" }[c];
+      const key = { artist: "artist", album: "album", year: "year", dur: "duration", rating: "rating", plays: "playCount", title: "title" }[c];
       const label = (SONG_COLS.find(([k]) => k === c) || [, c])[1] || "Title";
-      d.innerHTML = `${esc(label)}${S.songsSort === key && key !== "title" || (key === "title" && (S.songsSort === "title" || c === "num")) ? '<span class="arrow">' + (S.songsDir === "asc" ? "▲" : "▼") + "</span>" : ""}`;
-      if (SORTABLE[key] && c !== "art" && c !== "love") {
+      const cls = { num: "c-num", dur: "c-dur", rating: "c-rate", plays: "c-plays", love: "c-love" }[c];
+      if (cls) d.className = cls;
+      d.innerHTML = `${esc(label)}${key && S.songsSort === key ? '<span class="arrow">' + (S.songsDir === "asc" ? "▲" : "▼") + "</span>" : ""}`;
+      if (key && SORTABLE[key]) {
         headMap[key] = d;
         d.title = "Sort by " + SORTABLE[key];
         d.addEventListener("click", () => {
@@ -712,7 +749,10 @@ function songRow(t, i) {
     r.appendChild(d);
   }
   r.addEventListener("click", (e) => songsClick(e, i, t.id));
-  r.addEventListener("dblclick", () => playFromList(null, i));
+  r.addEventListener("dblclick", () => {
+    if (enqueueByDefault()) { addToQueue([t.id]); return; }
+    playFromList(null, i);
+  });
   r.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     if (!S.selection.has(t.id)) { S.selection.clear(); S.selection.add(t.id); S.anchor = i; S.songsRender && S.songsRender(); }
@@ -1296,6 +1336,15 @@ async function renderQueue() {
   });
 }
 
+function enqueueByDefault() {
+  return !!(S.settings && S.settings.behaviour && S.settings.behaviour.enqueueByDefault);
+}
+function addToQueue(ids) {
+  IPC.call("player.queueAdd", { trackIds: ids })
+    .then(() => toast("ok", "Added to the queue", ids.length === 1 ? "1 song" : ids.length + " songs"))
+    .catch(() => {});
+}
+
 /* ---------- settings screen ---------- */
 function setSetting(key, value) {
   const keys = key.split(".");
@@ -1382,7 +1431,7 @@ async function screenSettings(root, token) {
       .map(([v, l]) => ({ label: l, value: v })),
     () => m.speed || "follow", (v) => setSetting("motion.speed", v))));
   mo.appendChild(el("div", "sdiv"));
-  [["menus", "Menus and context menus"], ["tooltips", "Tooltips"], ["toasts", "Toasts"], ["dialogs", "Dialogs"], ["panels", "Side panels and drawers"], ["pages", "Page changes"]].forEach(([k, label]) => {
+  [["windows", "Main window"], ["menus", "Menus and context menus"], ["tooltips", "Tooltips"], ["toasts", "Toasts"], ["dialogs", "Dialogs"], ["panels", "Side panels and drawers"], ["pages", "Page changes"]].forEach(([k, label]) => {
     mo.appendChild(srow(label, "", mkToggle(
       () => (m.surfaces || {})[k] !== false, (v) => {
         const s = Object.assign({}, m.surfaces || {}); s[k] = v;
@@ -1404,7 +1453,6 @@ async function screenSettings(root, token) {
   const on = sec("Online", "Search further than your library and bring songs in.");
   const o = st.online || {};
   on.appendChild(srow("Soulseek search", "Needs slskd running on this computer", mkToggle(() => o.slskd !== false, (v) => setSetting("online.slskd", v))));
-  on.appendChild(srow("slskd address", "", mkCombo(["127.0.0.1:5030"].map((v) => ({ label: v, value: v })), () => o.slskdAddress || "127.0.0.1:5030", (v) => setSetting("online.slskdAddress", v))));
   on.appendChild(srow("Video search", "Stream or download from video sites", mkToggle(() => o.youtube !== false, (v) => setSetting("online.youtube", v))));
   on.appendChild(srow("Downloads folder", "Where downloads land", (() => {
     const w = el("span", "sctl");
@@ -1417,7 +1465,6 @@ async function screenSettings(root, token) {
     w.append(t, pick);
     return w;
   })()));
-  on.appendChild(srow("Save online songs to the library", "Songs you play from online stay out of the library unless this is on", mkToggle(() => o.saveToLibrary, (v) => setSetting("online.saveToLibrary", v))));
 
   /* advanced */
   const adv = sec("Advanced", "");
@@ -1880,6 +1927,74 @@ function wireControls() {
    hide() -> close animation -> popup.hidden, click -> popup.pick, Esc -> popup.close. */
 const CHECK_HTML = `<span class="ic chk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS.check}</svg></span>`;
 
+/* ---------- toast window page (?toast=1) ----------
+   add(args) -> measure -> toast.size -> the window shows -> shown() -> fade in.
+   After 3.4 s it fades out, and toast.hidden hides the window. clear() drops it
+   at once (the main window moved). Up to three stack, newest at the bottom. */
+function bootToast() {
+  document.body.classList.add("popup", "toastpage");
+  ["#app", "#npPage", "#onlinePanel", "#queueDrawer", "#miniPlayer", "#popupLayer"].forEach((sel) => {
+    const n = document.querySelector(sel);
+    if (n) n.remove();
+  });
+  hydrateIcons(document);
+  const box = $("#toasts");
+  const T = { shown: false, timers: new Set() };
+  const post = (cmd, args) => IPC.post({ id: 0, cmd, args: args || {} });
+  function setMotion(m) {
+    const r = document.documentElement;
+    r.dataset.motion = m && m.on === false ? "off" : "on";
+    r.dataset.speed = m && m.speed && m.speed !== "normal" ? m.speed : "";
+  }
+  function sendSize() {
+    const r = box.getBoundingClientRect();
+    post("toast.size", { w: Math.ceil(r.width), h: Math.ceil(r.height) });
+  }
+  function later(fn, ms) {
+    const t = setTimeout(() => { T.timers.delete(t); fn(); }, ms);
+    T.timers.add(t);
+  }
+  function drop(t) {
+    if (!t.isConnected) return;
+    t.remove();
+    if (!box.children.length) { T.shown = false; post("toast.hidden"); }
+    else sendSize();
+  }
+  function close(t) {
+    if (!t.isConnected || t.classList.contains("closing")) return;
+    const dur = readDur(t, "--dur-close");
+    if (!dur) { drop(t); return; }
+    t.classList.remove("anim-in-top");
+    t.classList.add("closing", "anim-out-top");
+    later(() => drop(t), dur + 20);
+  }
+  function reveal(t) {
+    t.classList.remove("pre");
+    if (readDur(t, "--dur-open") > 0) { void t.offsetWidth; t.classList.add("anim-in-top"); }
+  }
+  function add(a) {
+    a = a || {};
+    setMotion(a.motion);
+    const t = toastNode(a.kind, a.title, a.text);
+    t.classList.add("pre");
+    box.appendChild(t);
+    while (box.children.length > 3) box.removeChild(box.firstChild);
+    requestAnimationFrame(sendSize);
+    if (T.shown) reveal(t);
+    later(() => close(t), 3400);
+  }
+  function shown() {
+    T.shown = true;
+    box.querySelectorAll(".toast.pre").forEach(reveal);
+  }
+  function clear() {
+    T.timers.forEach(clearTimeout); T.timers.clear();
+    box.innerHTML = "";
+    if (T.shown) { T.shown = false; post("toast.hidden"); }
+  }
+  window.__smpToast = { add, shown, clear };
+}
+
 function bootPopup() {
   document.body.classList.add("popup");
   /* the pop-up window draws nothing but the surface: drop the main page DOM */
@@ -1899,8 +2014,9 @@ function bootPopup() {
   }).catch(() => {});
 
   function motionOn() {
-    const mo = (S.settings || {}).motion || {};
-    return mo.enabled !== false && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const r = document.documentElement;
+    const key = P.kind === "dialog" ? "dialogs" : "menus";
+    return r.dataset.motion !== "off" && !(r.dataset.still || "").split(" ").includes(key);
   }
   function readDur(varName) {
     const raw = getComputedStyle(document.documentElement).getPropertyValue(varName) || "120ms";
@@ -1997,6 +2113,12 @@ function bootPopup() {
 
   function render(payload) {
     payload = payload || {};
+    if (payload.motion) {
+      const r = document.documentElement, m = payload.motion;
+      r.dataset.motion = m.on === false ? "off" : "on";
+      r.dataset.speed = m.speed && m.speed !== "normal" ? m.speed : "";
+      r.dataset.still = m.still || "";
+    }
     P.token = payload.token || "";
     P.kind = payload.kind || "menu";
     P.place = payload.placement || "point";
@@ -2153,9 +2275,10 @@ async function boot() {
   markTabs();
   renderPage();
 }
-if (POPUP_MODE) {
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootPopup);
-  else bootPopup();
+if (POPUP_MODE || TOAST_MODE) {
+  const b = POPUP_MODE ? bootPopup : bootToast;
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", b);
+  else b();
 } else {
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
   else boot();

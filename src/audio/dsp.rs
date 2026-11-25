@@ -130,14 +130,15 @@ impl Dsp {
     pub fn process(&mut self, samples: &mut [f32]) {
         let rg = 10.0f64.powf(self.rg_gain_db() / 20.0);
         let apply_rg = (rg - 1.0).abs() > 1e-4;
-        for s in samples.iter_mut() {
+        for (i, s) in samples.iter_mut().enumerate() {
             let mut x = *s as f64;
             if apply_rg {
                 x *= rg;
             }
+            // Each band keeps one filter per channel: left, then right.
+            let ch = i & 1;
             for b in self.eq.chunks_mut(2) {
-                x = b[0].run(x);
-                x = b[1].run(x);
+                x = b[ch].run(x);
             }
             *s = clip_guard(x) as f32;
         }
@@ -220,12 +221,16 @@ mod tests {
         let mut d = Dsp::new(44100);
         d.set_eq(true, &{ let mut g = [0.0; 10]; g[band] = gain_db; g });
         let n = 44100; // one second settles any transient
+        // Interleaved stereo, the same tone on both sides.
         let mut s: Vec<f32> = (0..n)
-            .map(|i| (2.0 * std::f64::consts::PI * freq * i as f64 / rate) as f32 * 0.1)
+            .flat_map(|i| {
+                let v = ((2.0 * std::f64::consts::PI * freq * i as f64 / rate).sin() * 0.1) as f32;
+                [v, v]
+            })
             .collect();
         d.process(&mut s);
         // Peak of the second half, past the settle.
-        s[n / 2..].iter().fold(0.0f64, |m, &v| m.max(v.abs() as f64)) * 10.0
+        s[n..].iter().fold(0.0f64, |m, &v| m.max(v.abs() as f64)) * 10.0
     }
 
     #[test]

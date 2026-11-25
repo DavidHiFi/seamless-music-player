@@ -19,6 +19,7 @@ mod scrobble;
 mod selftest;
 mod settings;
 mod smtc;
+mod winanim;
 
 use library::Library;
 use online::Online;
@@ -68,6 +69,8 @@ pub enum UserEvent {
     Loaded,
     Show,
     Quit,
+    /// A main-window open (true) or close finished its move.
+    WinAnimDone(u64, bool),
 }
 
 pub struct Events {
@@ -474,7 +477,17 @@ fn dispatch(app: &App, id: u64, cmd: &str, args: &Value) -> Option<Result<Value,
         }
 
         // ---- settings / devices / window / app ----
-        "settings.get" => Some(Ok(app.settings.settings.lock().unwrap().to_json())),
+        "settings.get" => {
+            let mut v = app.settings.settings.lock().unwrap().to_json();
+            // The shared motion switch and Windows' own, so the page can resolve "follow".
+            let (global_on, global_speed) = winanim::global();
+            v["_motion"] = json!({
+                "globalOn": global_on,
+                "globalSpeed": global_speed,
+                "systemOn": winanim::system_on(),
+            });
+            Some(Ok(v))
+        }
         "settings.set" => {
             let key = arg("key").as_str().unwrap_or("").to_string();
             let value = arg("value");
@@ -662,18 +675,51 @@ fn apply_glass(window: &Window) {
     }
 }
 
-fn show(window: &Window, webview: &WebView) {
-    window.set_visible(true);
+type Proxy = tao::event_loop::EventLoopProxy<UserEvent>;
+
+fn window_motion(settings: &SettingsFile) -> Option<f32> {
+    winanim::window_scale(settings.settings.lock().unwrap().extra.get("motion"))
+}
+
+/// Shows the main window with its fade and rise. The page holds a solid
+/// fill while the window moves; the glass returns once it has settled.
+fn show(window: &Window, webview: &WebView, settings: &SettingsFile, proxy: &Proxy) {
+    let hwnd = window.hwnd();
     if window.is_minimized() {
         window.set_minimized(false);
     }
+    if !window.is_visible() || winanim::level() < 1.0 {
+        let _ = webview.evaluate_script("document.documentElement.classList.add('win-moving')");
+        let p = proxy.clone();
+        let done = move |g| {
+            let _ = p.send_event(UserEvent::WinAnimDone(g, true));
+        };
+        if winanim::start(hwnd, true, window_motion(settings), done).is_none() {
+            winanim::cancel(hwnd, true);
+            let _ = webview.evaluate_script("document.documentElement.classList.remove('win-moving')");
+        }
+    }
+    window.set_visible(true);
     window.set_focus();
     let _ = webview.evaluate_script("window.__smpHidden&&window.__smpHidden(false)");
 }
 
-fn hide(window: &Window, webview: &WebView) {
-    window.set_visible(false);
+fn hide(window: &Window, webview: &WebView, settings: &SettingsFile, proxy: &Proxy) {
     let _ = webview.evaluate_script("window.__smpHidden&&window.__smpHidden(true)");
+    if !window.is_visible() {
+        return;
+    }
+    let hwnd = window.hwnd();
+    let _ = webview.evaluate_script("document.documentElement.classList.add('win-moving')");
+    let p = proxy.clone();
+    let done = move |g| {
+        let _ = p.send_event(UserEvent::WinAnimDone(g, false));
+    };
+    if winanim::start(hwnd, false, window_motion(settings), done).is_none() {
+        winanim::cancel(hwnd, false);
+        window.set_visible(false);
+        let _ = webview.evaluate_script("document.documentElement.classList.remove('win-moving')");
+    }
 }
 
 fn save_rect(settings: &SettingsFile, window: &Window) {
@@ -694,9 +740,9 @@ fn save_rect(settings: &SettingsFile, window: &Window) {
     settings.update(|s| s.window = Some(r));
 }
 
-fn close_requested(settings: &SettingsFile, window: &Window, webview: &WebView, cf: &mut ControlFlow, tray: &mut Option<TrayIcon>, player: &Arc<Player>, quit: bool) {
+fn close_requested(settings: &SettingsFile, window: &Window, webview: &WebView, proxy: &Proxy, cf: &mut ControlFlow, tray: &mut Option<TrayIcon>, player: &Arc<Player>, quit: bool) {
     if !quit && settings.settings.lock().unwrap().close_to_tray {
-        hide(window, webview);
+        hide(window, webview, settings, proxy);
         return;
     }
     player.save_state();
@@ -744,6 +790,15 @@ fn main() {
 
     library::ensure_app_dirs();
     let settings = Arc::new(SettingsFile::load(settings::settings_path()));
+    if !settings.settings.lock().unwrap().page_flag("behaviour", "rememberPlayback", true) {
+        settings.update(|s| {
+            s.last_queue.clear();
+            s.last_index = 0;
+            s.last_track = None;
+            s.last_position = 0.0;
+            s.was_playing = false;
+        });
+    }
     let events = Events::new();
     let lib = match Library::open(&settings::db_path(), Arc::clone(&events)) {
         Ok(l) => Arc::new(l),
@@ -764,7 +819,7 @@ fn main() {
         player: Arc::clone(&player),
         smtc: Mutex::new(smtc),
         discord: Mutex::new(discord::Discord::new(discord_on)),
-        scrobbler: Scrobbler::new(),
+        scrobbler: Scrobbler::new(Arc::clone(&settings)),
         online: Arc::new(Online::new(Arc::clone(&events), Arc::clone(&settings))),
         watcher,
     });
@@ -927,7 +982,7 @@ fn main() {
     {
         let p = event_loop.create_proxy();
         std::thread::Builder::new().name("single-instance".into()).spawn(move || unsafe {
-            if let Ok(h) = CreateEventW(None, true, false, w!("Local\\Smp.Show")) {
+            if let Ok(h) = CreateEventW(None, false, false, w!("Local\\Smp.Show")) {
                 loop {
                     if WaitForSingleObject(h, 0xFFFFFFFF) == WAIT_OBJECT_0 {
                         let _ = p.send_event(UserEvent::Show);
@@ -937,6 +992,7 @@ fn main() {
         }).ok();
     }
 
+    let anim_proxy = event_loop.create_proxy();
     event_loop.run(move |event, _, cf| {
         *cf = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(1000));
         let _keep = &ctx;
@@ -967,15 +1023,25 @@ fn main() {
                 if !shown_once {
                     shown_once = true;
                     if !start_hidden {
-                        show(&window, &webview);
+                        show(&window, &webview, &settings, &anim_proxy);
                     } else {
                         let _ = webview.evaluate_script("window.__smpHidden&&window.__smpHidden(true)");
                     }
                 }
             }
-            Event::UserEvent(UserEvent::Show) => show(&window, &webview),
+            Event::UserEvent(UserEvent::WinAnimDone(gen, opened)) => {
+                let hwnd = window.hwnd();
+                if winanim::finish(hwnd, gen, opened) {
+                    if !opened {
+                        window.set_visible(false);
+                        winanim::after_hide(hwnd);
+                    }
+                    let _ = webview.evaluate_script("document.documentElement.classList.remove('win-moving')");
+                }
+            }
+            Event::UserEvent(UserEvent::Show) => show(&window, &webview, &settings, &anim_proxy),
             Event::UserEvent(UserEvent::Quit) => {
-                close_requested(&settings, &window, &webview, cf, &mut tray, &player, true);
+                close_requested(&settings, &window, &webview, &anim_proxy, cf, &mut tray, &player, true);
             }
             Event::UserEvent(UserEvent::Tray(TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -983,14 +1049,14 @@ fn main() {
                 ..
             })) => {
                 if window.is_visible() && !window.is_minimized() {
-                    hide(&window, &webview);
+                    hide(&window, &webview, &settings, &anim_proxy);
                 } else {
-                    show(&window, &webview);
+                    show(&window, &webview, &settings, &anim_proxy);
                 }
             }
             Event::UserEvent(UserEvent::Tray(_)) => {}
             Event::UserEvent(UserEvent::Menu(e)) => match e.id.0.as_str() {
-                "show" => show(&window, &webview),
+                "show" => show(&window, &webview, &settings, &anim_proxy),
                 "toggle" => {
                     let _ = player.toggle();
                     player.push_state();
@@ -1002,7 +1068,7 @@ fn main() {
                     let _ = player.prev();
                 }
                 "quit" => {
-                    close_requested(&settings, &window, &webview, cf, &mut tray, &player, true);
+                    close_requested(&settings, &window, &webview, &anim_proxy, cf, &mut tray, &player, true);
                 }
                 _ => {}
             },
@@ -1018,7 +1084,7 @@ fn main() {
                 match cmd.as_str() {
                     "window.minimize" => {
                         if settings.settings.lock().unwrap().minimize_to_tray {
-                            hide(&window, &webview);
+                            hide(&window, &webview, &settings, &anim_proxy);
                         } else {
                             window.set_minimized(true);
                         }
@@ -1030,7 +1096,7 @@ fn main() {
                     }
                     "window.close" => {
                         reply(&events, id, true, json!({ "ok": true }));
-                        close_requested(&settings, &window, &webview, cf, &mut tray, &player, false);
+                        close_requested(&settings, &window, &webview, &anim_proxy, cf, &mut tray, &player, false);
                     }
                     "window.startDrag" => {
                         let _ = window.drag_window();
@@ -1171,7 +1237,7 @@ fn main() {
             Event::WindowEvent { window_id, .. } if window_id == popup_window.id() => {}
             Event::WindowEvent { window_id, .. } if window_id == toast_window.id() => {}
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                close_requested(&settings, &window, &webview, cf, &mut tray, &player, false);
+                close_requested(&settings, &window, &webview, &anim_proxy, cf, &mut tray, &player, false);
             }
             Event::WindowEvent { event: WindowEvent::Moved(_), .. } => {
                 rect_dirty = true;
