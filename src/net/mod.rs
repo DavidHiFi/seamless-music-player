@@ -46,7 +46,7 @@ impl Slskd {
     pub fn read_folders() -> (String, String) {
         let Ok(body) = std::fs::read_to_string(SLSKD_CONFIG_PATH) else {
             return (
-                "G:\\Dopamine\\Downloads".into(),
+                "G:\\Music\\Downloads".into(),
                 "G:\\Music Downloads\\Incomplete".into(),
             );
         };
@@ -60,7 +60,7 @@ impl Slskd {
             fallback.into()
         };
         (
-            value("downloads", "G:\\Dopamine\\Downloads"),
+            value("downloads", "G:\\Music\\Downloads"),
             value("incomplete", "G:\\Music Downloads\\Incomplete"),
         )
     }

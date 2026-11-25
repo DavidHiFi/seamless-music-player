@@ -706,7 +706,7 @@ fn ticker_loop(p: Arc<Player>) {
 
 /// Decode a real file through the whole chain to a null sink for `secs`,
 /// checking the samples are not silent and the timing tracks. Used by the
-/// load gate check and as a cargo test when G:\Dopamine exists.
+/// load gate check and as a cargo test when G:\Music exists.
 pub fn selftest(path: &Path, secs: f64) -> Result<String, String> {
     let mut dec = Decoder::open(path)?;
     let (rg_t, rg_a) = (dec.info.rg_track, dec.info.rg_album);
@@ -767,7 +767,7 @@ mod tests {
     #[test]
     fn selftest_when_library_present() {
         // A real file from the music library, when the machine has one.
-        let dir = match std::fs::read_dir("G:\\Dopamine") {
+        let dir = match std::fs::read_dir("G:\\Music") {
             Ok(d) => d,
             Err(_) => return, // no library on this machine: skip
         };

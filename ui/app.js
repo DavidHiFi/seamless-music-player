@@ -1523,6 +1523,7 @@ function updatePlaybar() {
   $("#npArtist").textContent = t ? (t.artists || []).join(", ") : "Pick a song and press play";
   $("#npTitle").classList.toggle("clickable", !!t);
   $("#npArtist").classList.toggle("clickable", !!t);
+  $(".np").classList.toggle("idle", !t);
   const artBox = $("#npArt");
   if (t && t.artworkId) {
     if (artBox.dataset.id !== String(t.artworkId)) {
