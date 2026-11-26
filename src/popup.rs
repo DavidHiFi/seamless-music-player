@@ -15,8 +15,8 @@ use std::ffi::c_void;
 use windows::core::{w, PCSTR};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{
-    DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
-    DWMWCP_ROUND,
+    DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
 };
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
@@ -49,6 +49,9 @@ pub fn apply_acrylic(hwnd: isize, tint: u32) {
         let _ = DwmSetWindowAttribute(h, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const i32 as *const c_void, 4);
         let round: i32 = DWMWCP_ROUND.0;
         let _ = DwmSetWindowAttribute(h, DWMWA_WINDOW_CORNER_PREFERENCE, &round as *const i32 as *const c_void, 4);
+        // Hide Windows 11's own 1px system border so only our single CSS edge shows.
+        let no_border: u32 = 0xFFFF_FFFE;
+        let _ = DwmSetWindowAttribute(h, DWMWA_BORDER_COLOR, &no_border as *const u32 as *const c_void, 4);
         let Ok(lib) = LoadLibraryW(w!("user32.dll")) else { return };
         let Some(f) = GetProcAddress(lib, PCSTR(b"SetWindowCompositionAttribute\0".as_ptr())) else { return };
         let set: extern "system" fn(HWND, *mut WinCompAttrData) -> i32 = std::mem::transmute(f);

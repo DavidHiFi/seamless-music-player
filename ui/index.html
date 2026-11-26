@@ -36,15 +36,9 @@
     <div class="wave-row">
       <span id="posCur" class="wave-time">0:00</span>
       <div id="wave" class="wave">
-        <svg id="waveSvg" viewBox="0 0 1000 14" preserveAspectRatio="none" aria-hidden="true">
-          <defs>
-            <clipPath id="wave-clip"><rect id="wave-clip-rect" x="0" y="0" width="0" height="14"/></clipPath>
-          </defs>
-          <path id="waveBg" class="wave-bg" d=""/>
-          <path id="waveFg" class="wave-fg" d="" clip-path="url(#wave-clip)"/>
-          <line id="waveFlatBg" class="wave-flat-bg" x1="0" y1="7" x2="1000" y2="7"/>
-          <line id="waveFlatFg" class="wave-flat-fg" x1="0" y1="7" x2="0" y2="7"/>
-        </svg>
+        <div class="wave-track">
+          <div id="waveFill" class="wave-fill"></div>
+        </div>
         <div id="waveThumb" class="wave-thumb"></div>
       </div>
       <span id="posTotal" class="wave-time">0:00</span>

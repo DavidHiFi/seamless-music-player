@@ -295,7 +295,7 @@ fn dispatch(app: &App, id: u64, cmd: &str, args: &Value) -> Option<Result<Value,
                 .name("rescan".into())
                 .spawn(move || lib.rescan(&ev))
                 .ok();
-            None // scan.progress and library.changed events carry the result
+            Some(Ok(json!({ "ok": true })))
         }
         "library.search" => {
             let q = arg("q").as_str().unwrap_or("").to_string();
@@ -307,13 +307,22 @@ fn dispatch(app: &App, id: u64, cmd: &str, args: &Value) -> Option<Result<Value,
             let (id, love) = (arg("id").as_i64().unwrap_or(0), arg("love").as_bool().unwrap_or(false));
             let r = app.lib.set_love(id, love);
             if r.is_ok() {
-                app.scrobbler.love(&app.lib.track_by_id(id).unwrap_or(Value::Null), love);
+                if let Some(t) = app.lib.track_by_id(id) {
+                    app.scrobbler.love(&t, love);
+                    app.events.emit("track.updated", t);
+                }
             }
             Some(r)
         }
         "track.setRating" => {
             let (id, rating) = (arg("id").as_i64().unwrap_or(0), arg("rating").as_i64().unwrap_or(0));
-            Some(app.lib.set_rating(id, rating))
+            let r = app.lib.set_rating(id, rating);
+            if r.is_ok() {
+                if let Some(t) = app.lib.track_by_id(id) {
+                    app.events.emit("track.updated", t);
+                }
+            }
+            Some(r)
         }
         "track.delete" => {
             let ids: Vec<i64> = arg("ids")
@@ -384,6 +393,25 @@ fn dispatch(app: &App, id: u64, cmd: &str, args: &Value) -> Option<Result<Value,
             let ids = resolve_play_source(app, args);
             let start = arg("startIndex").as_u64().map(|n| n as usize).unwrap_or(0);
             Some(app.player.play(&ids, start))
+        }
+        "player.radio" => {
+            let mut ids = resolve_play_source(app, args);
+            if ids.is_empty() {
+                if let Some(items) = app.lib.tracks("title", None, 0, 50_000)["items"].as_array() {
+                    ids = items.iter().filter_map(|t| t["id"].as_i64()).collect();
+                }
+            }
+            if ids.is_empty() {
+                Some(Ok(json!({ "ok": false })))
+            } else {
+                let _ = app.player.set_shuffle(true);
+                let pick = (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.subsec_nanos() as usize)
+                    .unwrap_or(0))
+                    % ids.len();
+                Some(app.player.play(&ids, pick))
+            }
         }
         "player.toggle" => Some(app.player.toggle()),
         "player.next" => Some(app.player.next()),
@@ -460,7 +488,7 @@ fn dispatch(app: &App, id: u64, cmd: &str, args: &Value) -> Option<Result<Value,
                 .name("online-search".into())
                 .spawn(move || online.search(&q))
                 .ok();
-            None
+            Some(Ok(json!({ "ok": true })))
         }
         "online.stream" => {
             let rid = arg("resultId").as_str().unwrap_or("").to_string();

@@ -652,6 +652,12 @@ function fmtDate(v) {
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 const ROW_H = 30, PAGE_N = 200;
+function loadColWidths() {
+  try { return JSON.parse(localStorage.getItem("smp.colWidths") || "{}") || {}; } catch { return {}; }
+}
+function saveColWidths(w) {
+  try { localStorage.setItem("smp.colWidths", JSON.stringify(w)); } catch {}
+}
 
 async function screenSongs(root, token) {
   S.selection.clear(); S.anchor = null;
@@ -670,16 +676,22 @@ async function screenSongs(root, token) {
   tools.append(shuffle, colsBtn, hint);
   if (S.scan) hint.textContent = `Scanning: ${S.scan.done} of ${S.scan.total}`;
 
+  const colWidths = loadColWidths();
+  const applyColWidth = (elCell, c) => {
+    elCell.dataset.col = c;
+    if (colWidths[c]) elCell.style.flex = `0 0 ${colWidths[c]}px`;
+  };
   const header = el("div", "tbl-head");
   const headMap = {};
   S.songsCols.forEach((c) => {
     const d = el("div");
-    if (c === "art") { d.innerHTML = "&nbsp;"; d.style.flex = "0 0 34px"; }
+    if (c === "art") { d.innerHTML = "&nbsp;"; d.style.flex = "0 0 34px"; d.dataset.col = "art"; }
     else {
       const key = COL_SORT[c];
       const label = (SONG_COLS.find(([k]) => k === c) || [, c])[1] || "Title";
       const cls = { num: "c-num", dur: "c-dur", rating: "c-rate", plays: "c-plays", love: "c-love", added: "c-date", modified: "c-date", album: "c-album", title: "c-title", artist: "c-artist" }[c];
       if (cls) d.className = cls;
+      applyColWidth(d, c);
       const on = key && S.songsSort === key;
       d.innerHTML = `<span class="h-label">${esc(label)}</span>${on ? '<span class="arrow">' + icon(S.songsDir === "asc" ? "chevron-up" : "chevron-down") + "</span>" : ""}`;
       if (key && SORTABLE[key]) {
@@ -687,13 +699,49 @@ async function screenSongs(root, token) {
         d.classList.add("sortable");
         d.tabIndex = 0;
         d.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); d.click(); } });
-        d.title = "Sort by " + SORTABLE[key];
-        d.addEventListener("click", () => {
+        d.addEventListener("click", (e) => {
+          if (e.target.closest(".col-resizer")) return;
           if (S.songsSort === key) S.songsDir = S.songsDir === "asc" ? "desc" : "asc";
           else { S.songsSort = key; S.songsDir = (key === "dateAdded" || key === "dateModified" || key === "playCount" || key === "rating") ? "desc" : "asc"; }
           renderPage();
         });
         if (S.songsSort === key) d.classList.add("sort");
+      }
+      if (c !== "num") {
+        const grip = el("span", "col-resizer");
+        grip.addEventListener("click", (e) => e.stopPropagation());
+        grip.addEventListener("dblclick", (e) => {
+          e.stopPropagation();
+          delete colWidths[c];
+          saveColWidths(colWidths);
+          d.style.flex = "";
+          document.querySelectorAll(`#page .tbl-row > [data-col="${c}"]`).forEach((cell) => { cell.style.flex = ""; });
+        });
+        grip.addEventListener("pointerdown", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          grip.classList.add("dragging");
+          grip.setPointerCapture(e.pointerId);
+          const startX = e.clientX;
+          const startW = d.getBoundingClientRect().width;
+          const onMove = (ev) => {
+            const w = Math.round(Math.min(640, Math.max(44, startW + (ev.clientX - startX))));
+            colWidths[c] = w;
+            d.style.flex = `0 0 ${w}px`;
+            document.querySelectorAll(`#page .tbl-row > [data-col="${c}"]`).forEach((cell) => { cell.style.flex = `0 0 ${w}px`; });
+          };
+          const onUp = () => {
+            grip.classList.remove("dragging");
+            grip.removeEventListener("pointermove", onMove);
+            grip.removeEventListener("pointerup", onUp);
+            grip.removeEventListener("pointercancel", onUp);
+            saveColWidths(colWidths);
+          };
+          grip.addEventListener("pointermove", onMove);
+          grip.addEventListener("pointerup", onUp);
+          grip.addEventListener("pointercancel", onUp);
+        });
+        d.appendChild(grip);
       }
     }
     header.appendChild(d);
@@ -730,11 +778,14 @@ async function screenSongs(root, token) {
 }
 function songRow(t, i) {
   const r = el("div", "tbl-row");
+  const colWidths = loadColWidths();
   r.dataset.id = t.id; r.dataset.i = i;
   if (S.selection.has(t.id)) r.classList.add("sel");
   r.classList.toggle("playing", S.player.track && S.player.track.id === t.id);
   for (const c of S.songsCols) {
     const d = el("div");
+    d.dataset.col = c;
+    if (c !== "art" && colWidths[c]) d.style.flex = `0 0 ${colWidths[c]}px`;
     switch (c) {
       case "num": d.className = "c-num"; d.textContent = i + 1; break;
       case "art": {
@@ -752,10 +803,40 @@ function songRow(t, i) {
       case "rating": {
         d.className = "c-rate";
         d.innerHTML = ratingStars(t.rating, true);
+        d.addEventListener("click", (e) => {
+          const star = e.target.closest(".star");
+          if (!star) return;
+          e.stopPropagation();
+          const stars = [...d.querySelectorAll(".star")];
+          const clicked = stars.indexOf(star) + 1;
+          const next = (t.rating || 0) === clicked ? 0 : clicked;
+          t.rating = next;
+          d.innerHTML = ratingStars(next, true);
+          if (S.player.track && S.player.track.id === t.id) {
+            S.player.track.rating = next;
+            $("#rating").innerHTML = ratingStars(next, true);
+          }
+          IPC.call("track.setRating", { id: t.id, rating: next });
+        });
         break;
       }
       case "plays": d.className = "c-plays"; d.textContent = fmtPlays(t.playCount); break;
-      case "love": d.className = "c-love"; d.innerHTML = t.love ? icon("heart", "badge-love") : ""; break;
+      case "love": {
+        d.className = "c-love";
+        d.innerHTML = icon("heart", t.love ? "badge-love" : "badge-love off");
+        d.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const next = !t.love;
+          t.love = next;
+          d.innerHTML = icon("heart", next ? "badge-love" : "badge-love off");
+          if (S.player.track && S.player.track.id === t.id) {
+            S.player.track.love = next;
+            $("#loveBtn").classList.toggle("love-on", next);
+          }
+          IPC.call("track.setLove", { id: t.id, love: next });
+        });
+        break;
+      }
       case "added": d.className = "c-date"; d.textContent = fmtDate(t.dateAdded); break;
       case "modified": d.className = "c-date"; d.textContent = fmtDate(t.dateModified); break;
     }
@@ -1221,18 +1302,19 @@ function clearSearch() {
 async function runOnlineSearch(q) {
   S.online.q = q;
   S.online.busy = true;
+  S.online.peersProblem = "";
   $("#onlineSpin").classList.remove("hidden");
   openOnline();
   $("#onlineBody").innerHTML = "";
   $("#onlineBody").appendChild(el("div", "online-note", "Looking online…"));
   const res = await IPC.call("online.search", { q });
-  if (res === null && S.online.busy) {
+  if (res === null) {
+    S.online.busy = false;
+    $("#onlineSpin").classList.add("hidden");
     $("#onlineBody").innerHTML = "";
     $("#onlineBody").appendChild(stateBox("error", "warning", "Could not reach the online sources",
       "slskd or the video search did not answer. Check they are running, then search again.", "Try again", () => runOnlineSearch(q)));
   }
-  S.online.busy = false;
-  $("#onlineSpin").classList.add("hidden");
 }
 function openOnline() {
   S.online.open = true;
@@ -1258,7 +1340,7 @@ function renderOnline() {
   const body = $("#onlineBody");
   if (!S.online.open) return;
   body.innerHTML = "";
-  const groups = [["Soulseek", S.online.soulseek], ["YouTube", S.online.youtube]];
+  const groups = [["Soulseek", S.online.soulseek], ["Albums", S.online.albums], ["YouTube", S.online.youtube]];
   let any = false;
   groups.forEach(([label, items]) => {
     if (!items || !items.length) return;
@@ -1268,9 +1350,16 @@ function renderOnline() {
     items.forEach((it) => rows.appendChild(onlineRow(it)));
     body.appendChild(rows);
   });
+  if (S.online.peersProblem) {
+    body.appendChild(el("div", "online-note", S.online.peersProblem));
+  }
   if (!any) {
-    body.appendChild(stateBox("info", "stream", "Nothing found yet",
-      S.online.busy ? "Still looking." : "No online results for this search. Try different words."));
+    if (S.online.busy) {
+      body.appendChild(el("div", "online-note", "Looking online…"));
+    } else {
+      body.appendChild(stateBox("info", "stream", "Nothing found",
+        "No online results for this search. Try different words."));
+    }
   }
 }
 function onlineRow(it) {
@@ -1589,54 +1678,68 @@ function updatePlaybar() {
   updateWave();
   if (S.mini) updateMini();
 }
-let waveSeed = 1;
-function waveBars(trackId, n) {
-  let seed = 0;
-  const s = String(trackId || "");
-  for (let i = 0; i < s.length; i++) seed = (seed * 31 + s.charCodeAt(i)) >>> 0;
-  if (!seed) seed = 1;
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    seed = (seed * 1103515245 + 12345) >>> 0;
-    const v = 0.18 + (seed / 4294967296) * 0.82;
-    out.push(v);
+let posAnchor = { pos: 0, at: 0 };
+let posRaf = 0;
+let lastShownSec = -1;
+function livePosition() {
+  const p = S.player;
+  if (!p.playing || !p.duration) return p.position || 0;
+  const dt = (performance.now() - posAnchor.at) / 1000;
+  return Math.min(p.duration, Math.max(0, posAnchor.pos + dt * (p.speed || 1)));
+}
+function renderProgress(pos) {
+  const dur = S.player.duration || 0;
+  const ratio = dur > 0 ? Math.min(1, Math.max(0, pos / dur)) : 0;
+  const fill = $("#waveFill");
+  if (fill) fill.style.transform = `scaleX(${ratio})`;
+  const thumb = $("#waveThumb");
+  if (thumb) thumb.style.left = (ratio * 100) + "%";
+  const mini = $("#miniFill");
+  if (mini) mini.style.width = (ratio * 100) + "%";
+  const sec = Math.floor(pos);
+  if (sec !== lastShownSec) {
+    lastShownSec = sec;
+    $("#posCur").textContent = fmtTime(pos);
   }
-  return out;
+}
+function ensurePosLoop() {
+  if (S.player.playing && S.player.duration > 0) {
+    if (!posRaf) posRaf = requestAnimationFrame(posFrame);
+  } else if (posRaf) {
+    cancelAnimationFrame(posRaf);
+    posRaf = 0;
+  }
+}
+function posFrame() {
+  posRaf = 0;
+  if (!S.player.playing || !S.player.duration) return;
+  const wave = $("#wave");
+  if (!wave || !wave.classList.contains("dragging")) {
+    const pos = livePosition();
+    S.player.position = pos;
+    renderProgress(pos);
+    updateLyrics();
+  }
+  posRaf = requestAnimationFrame(posFrame);
 }
 function updateWave() {
-  const p = S.player;
-  const ratio = p.duration ? Math.min(1, p.position / p.duration) : 0;
-  const flat = S.settings && S.settings.appearance && S.settings.appearance.waveProgress === false;
-  $("#waveFlatBg").style.display = flat ? "" : "none";
-  $("#waveFlatFg").style.display = flat ? "" : "none";
-  $("#waveBg").style.display = flat ? "none" : "";
-  $("#waveFg").style.display = flat ? "none" : "";
-  if (flat) {
-    $("#waveFlatFg").setAttribute("x2", String(ratio * 1000));
-  } else {
-    const key = p.track ? p.track.id : "none";
-    if (waveSeed !== key) {
-      waveSeed = key;
-      const bars = waveBars(key, 60);
-      let d = "";
-      bars.forEach((v, i) => {
-        const x = 5 + (i * 990) / (bars.length - 1);
-        d += (i ? " L" : "M") + x.toFixed(1) + " " + (7 - v * 6).toFixed(2);
-      });
-      const d2 = [];
-      bars.forEach((v, i) => { const x = 5 + (i * 990) / (bars.length - 1); d2.unshift(`${x.toFixed(1)} ${(7 + v * 6).toFixed(2)}`); });
-      $("#waveBg").setAttribute("d", d + " " + d2.map((s) => "L" + s).join(" "));
-      $("#waveFg").setAttribute("d", d + " " + d2.map((s) => "L" + s).join(" "));
-    }
-    $("#wave-clip-rect").setAttribute("width", String(ratio * 1000));
-  }
-  $("#waveThumb").style.left = (ratio * 100) + "%";
+  posAnchor = { pos: S.player.position || 0, at: performance.now() };
+  lastShownSec = -1;
+  renderProgress(posAnchor.pos);
+  ensurePosLoop();
 }
 function waveSeek(e) {
   const wave = $("#wave");
   const r = wave.getBoundingClientRect();
   const ratio = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-  if (S.player.duration) IPC.call("player.seek", { seconds: ratio * S.player.duration });
+  if (S.player.duration) {
+    const sec = ratio * S.player.duration;
+    S.player.position = sec;
+    posAnchor = { pos: sec, at: performance.now() };
+    lastShownSec = -1;
+    renderProgress(sec);
+    IPC.call("player.seek", { seconds: sec });
+  }
   return ratio;
 }
 function initWave() {
@@ -1644,16 +1747,15 @@ function initWave() {
   let dragging = false;
   wave.addEventListener("pointerdown", (e) => {
     dragging = true; wave.classList.add("dragging"); wave.setPointerCapture(e.pointerId);
-    const ratio = waveSeek(e);
-    $("#waveThumb").style.left = (ratio * 100) + "%";
+    waveSeek(e);
   });
   wave.addEventListener("pointermove", (e) => {
     if (!dragging) return;
     const r = wave.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-    $("#wave-clip-rect").setAttribute("width", String(ratio * 1000));
-    $("#waveThumb").style.left = (ratio * 100) + "%";
-    $("#posCur").textContent = fmtTime(ratio * S.player.duration);
+    const sec = ratio * (S.player.duration || 0);
+    lastShownSec = -1;
+    renderProgress(sec);
   });
   wave.addEventListener("pointerup", (e) => { dragging = false; wave.classList.remove("dragging"); waveSeek(e); });
 }
@@ -1884,8 +1986,26 @@ function wireEvents() {
   IPC.on("online.results", (p) => {
     if (!p) return;
     S.online.soulseek = p.soulseek || [];
+    S.online.albums = p.albums || [];
     S.online.youtube = p.youtube || [];
+    S.online.peersProblem = p.peersProblem || "";
+    S.online.busy = !!(p.searchingPeers || p.searchingYouTube);
+    $("#onlineSpin").classList.toggle("hidden", !S.online.busy);
     renderOnline();
+  });
+  IPC.on("track.updated", (t) => {
+    if (!t || t.id == null) return;
+    if (S.player.track && S.player.track.id === t.id) {
+      S.player.track = Object.assign({}, S.player.track, t);
+      $("#loveBtn").classList.toggle("love-on", !!S.player.track.love);
+      $("#rating").innerHTML = ratingStars(S.player.track.rating || 0, true);
+    }
+    if (S.songs && S.songs.cache) {
+      for (const [k, item] of S.songs.cache) {
+        if (item && item.id === t.id) S.songs.cache.set(k, Object.assign({}, item, t));
+      }
+      if (S.songsRender) S.songsRender();
+    }
   });
   IPC.on("download.progress", (p) => {
     if (!p) return;
@@ -1913,14 +2033,22 @@ function wireControls() {
   });
   $("#loveBtn").addEventListener("click", () => {
     const t = S.player.track;
-    if (t) IPC.call("track.setLove", { id: t.id, love: !t.love });
+    if (!t) return;
+    const next = !t.love;
+    t.love = next;
+    $("#loveBtn").classList.toggle("love-on", next);
+    IPC.call("track.setLove", { id: t.id, love: next });
   });
   $("#rating").addEventListener("click", (e) => {
     const t = S.player.track;
     const star = e.target.closest(".star");
     if (!t || !star) return;
     const stars = [...$("#rating").querySelectorAll(".star")];
-    IPC.call("track.setRating", { id: t.id, rating: stars.indexOf(star) + 1 });
+    const clicked = stars.indexOf(star) + 1;
+    const next = (t.rating || 0) === clicked ? 0 : clicked;
+    t.rating = next;
+    $("#rating").innerHTML = ratingStars(next, true);
+    IPC.call("track.setRating", { id: t.id, rating: next });
   });
   $("#volSlider").addEventListener("input", (e) => {
     S.lastVol = S.lastVol == null ? S.player.volume : S.lastVol;
