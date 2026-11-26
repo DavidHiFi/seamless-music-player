@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#181825">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Music Search">
+<title>Music Search</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --base: #1E1E2E; --mantle: #181825; --crust: #11111B;
+  --s0: #313244; --s1: #45475A; --s2: #585B70;
+  --text: #CDD6F4; --sub: #A6ADC8; --muted: #7F849C;
+  --blue: #89B4FA; --mauve: #CBA6F7; --green: #A6E3A1; --red: #F38BA8; --peach: #FAB387;
+  --edge: 2px solid var(--s1);
+  --grad: linear-gradient(135deg, var(--blue), var(--mauve));
+  --speed: 1;
+  --open: calc(160ms * var(--speed));
+  --close: calc(120ms * var(--speed));
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; min-height: 100vh; background: var(--crust); color: var(--text);
+  font: 14px/1.45 "Fira Code", ui-monospace, Menlo, Consolas, monospace;
+  -webkit-tap-highlight-color: transparent;
+}
+button, input { font: inherit; color: inherit; }
+.wrap { max-width: 640px; margin: 0 auto; padding: 0 16px calc(96px + env(safe-area-inset-bottom)); }
+
+/* Docked header: light blur is allowed here, it pushes nothing and floats over the list. */
+header {
+  position: sticky; top: 0; z-index: 5;
+  padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
+  background: rgb(24 24 37 / .62);
+  -webkit-backdrop-filter: blur(24px) saturate(1.3); backdrop-filter: blur(24px) saturate(1.3);
+  border-bottom: 1px solid var(--s0);
+}
+header .in { max-width: 608px; margin: 0 auto; }
+.brand { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; }
+.brand h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.2px; }
+.brand .dot { width: 10px; height: 10px; border-radius: 999px; background: var(--grad); flex: none; }
+
+.field { position: relative; }
+.field svg.lens { position: absolute; left: 14px; top: 50%; width: 18px; height: 18px; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.field input {
+  width: 100%; height: 48px; padding: 0 48px 0 44px; font-size: 16px;
+  background: var(--mantle); border: var(--edge); border-radius: 14px; outline: none;
+  -webkit-appearance: none; appearance: none;
+  transition: border-color var(--open) ease, box-shadow var(--open) ease;
+}
+.field input::placeholder { color: var(--muted); }
+.field input::-webkit-search-cancel-button, .field input::-webkit-search-decoration { -webkit-appearance: none; display: none; }
+.field input:hover { border-color: transparent; background: linear-gradient(var(--mantle), var(--mantle)) padding-box, var(--grad) border-box; }
+.field input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgb(137 180 250 / .25); background: var(--mantle); }
+.clear {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  width: 34px; height: 34px; border-radius: 999px; border: var(--edge); background: var(--base);
+  display: none; align-items: center; justify-content: center; cursor: pointer; padding: 0; color: var(--sub);
+}
+.clear svg { width: 14px; height: 14px; }
+.has-text .clear { display: flex; }
+.clear:hover { border-color: transparent; background: linear-gradient(var(--s0), var(--s0)) padding-box, var(--grad) border-box; color: var(--text); }
+.clear:active { border-color: var(--mauve); background: var(--s0); }
+.clear:focus-visible { outline: none; box-shadow: 0 0 0 3px rgb(137 180 250 / .45); }
+
+.status { display: flex; align-items: center; gap: 8px; min-height: 20px; margin-top: 10px; color: var(--sub); font-size: 12.5px; }
+.spin { width: 14px; height: 14px; border-radius: 999px; border: 2px solid var(--s1); border-top-color: var(--blue); animation: spin .8s linear infinite; flex: none; display: none; }
+.busy .spin { display: block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+section { margin-top: 22px; }
+section[hidden] { display: none; }
+.head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 2px 10px; }
+.head h2 { margin: 0; font-size: 12px; font-weight: 600; color: var(--sub); text-transform: uppercase; letter-spacing: .8px; }
+.list { display: flex; flex-direction: column; gap: 8px; }
+
+.row {
+  position: relative; display: flex; align-items: center; gap: 12px; min-height: 64px;
+  padding: 10px 10px 10px 14px; background: var(--base); border: var(--edge); border-radius: 14px; overflow: hidden;
+}
+.row.enter { animation: rowIn var(--open) ease-out both; }
+@keyframes rowIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.info { flex: 1; min-width: 0; }
+.title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meta { color: var(--sub); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chip {
+  display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px;
+  border: var(--edge); background: var(--mantle); color: var(--sub); font-size: 11.5px; white-space: nowrap;
+}
+.chip.lossless { color: var(--mauve); }
+.chip.have { color: var(--green); }
+.chip.bad { color: var(--red); }
+
+.btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 38px; min-width: 76px; padding: 0 14px; border-radius: 999px; border: var(--edge);
+  background: var(--base); cursor: pointer; white-space: nowrap; font-weight: 500; font-size: 13px;
+  transition: background-color var(--open) ease, color var(--open) ease, border-color var(--open) ease;
+}
+.btn svg { width: 15px; height: 15px; flex: none; }
+.btn:hover { border-color: transparent; background: linear-gradient(var(--s0), var(--s0)) padding-box, var(--grad) border-box; }
+.btn:active { border-color: var(--mauve); background: var(--s0); }
+.btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgb(137 180 250 / .45); }
+.btn.add { background: var(--blue); border-color: var(--blue); color: var(--crust); }
+.btn.add:hover { border-color: transparent; background: linear-gradient(var(--blue), var(--blue)) padding-box, var(--grad) border-box; }
+.btn.add:active { background: var(--mauve); border-color: var(--mauve); }
+.btn.working { color: var(--blue); cursor: default; }
+.btn.done { color: var(--green); cursor: default; }
+.btn.retry { color: var(--red); }
+.btn:disabled { color: var(--muted); cursor: default; }
+.btn.small { height: 32px; min-width: 0; font-size: 12px; padding: 0 12px; }
+
+.bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: transparent; }
+.bar i { display: block; height: 100%; width: 0; background: var(--grad); transition: width calc(400ms * var(--speed)) ease; }
+
+.note {
+  margin-top: 18px; padding: 14px 16px; border: var(--edge); border-radius: 14px; background: var(--base);
+  color: var(--sub); font-size: 13px;
+}
+.note b { color: var(--text); font-weight: 600; display: block; margin-bottom: 2px; }
+.note.warn b { color: var(--peach); }
+.note.bad b { color: var(--red); }
+
+footer { margin-top: 34px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; color: var(--muted); font-size: 12px; }
+footer a { color: var(--blue); text-decoration: none; border-bottom: 1px solid rgb(137 180 250 / .35); }
+footer a:hover { color: var(--mauve); border-bottom-color: var(--mauve); }
+footer a:focus-visible { outline: none; box-shadow: 0 0 0 3px rgb(137 180 250 / .45); border-radius: 4px; }
+.prefs { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.seg { display: inline-flex; border: var(--edge); border-radius: 999px; background: var(--mantle); padding: 2px; gap: 2px; }
+.seg button { height: 28px; padding: 0 10px; border: 0; border-radius: 999px; background: transparent; color: var(--sub); cursor: pointer; font-size: 12px; }
+.seg button:hover { background: var(--s0); color: var(--text); }
+.seg button[aria-pressed="true"] { background: var(--s0); color: var(--text); box-shadow: inset 0 0 0 2px var(--blue); }
+.seg button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--blue); }
+
+/* Toast: opaque, never see-through. */
+.toast {
+  position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 9;
+  width: min(560px, calc(100% - 32px)); transform: translate(-50%, 8px); opacity: 0; pointer-events: none;
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  background: var(--base); border: var(--edge); border-radius: 14px; box-shadow: 0 10px 30px rgb(0 0 0 / .45);
+  transition: opacity var(--close) ease-in, transform var(--close) ease-in;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; transition: opacity var(--open) ease-out, transform var(--open) ease-out; }
+.toast .tick { width: 28px; height: 28px; border-radius: 999px; flex: none; display: flex; align-items: center; justify-content: center; background: var(--mantle); border: 2px solid var(--green); color: var(--green); }
+.toast .tick svg { width: 14px; height: 14px; }
+.toast p { margin: 0; flex: 1; min-width: 0; font-size: 13px; }
+.toast p span { color: var(--sub); display: block; font-size: 12px; }
+
+.still *, .still *::before, .still *::after { animation: none !important; transition: none !important; }
+.still .spin { animation: spin .8s linear infinite !important; }
+@media (prefers-reduced-motion: reduce) {
+  .row.enter { animation: none; }
+  .toast, .toast.show { transition: opacity var(--open) linear; transform: translate(-50%, 0); }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="in">
+    <div class="brand"><span class="dot"></span><h1>Music Search</h1></div>
+    <form class="field" id="form" autocomplete="off" role="search">
+      <svg class="lens" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+      <input id="q" type="search" enterkeyhint="search" placeholder="Song, artist or album" aria-label="Search for music" spellcheck="false" autocapitalize="off" autocorrect="off">
+      <button class="clear" id="clear" type="button" aria-label="Clear search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </form>
+    <div class="status" id="status"><span class="spin"></span><span id="statusText">Search for a song, then tap Add.</span></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="jobsBox" hidden>
+    <div class="head"><h2>Your adds</h2><button class="btn small" id="clearDone" type="button">Clear done</button></div>
+    <div class="list" id="jobs"></div>
+  </section>
+  <div id="notes"></div>
+  <section id="songsBox" hidden><div class="head"><h2>Songs</h2></div><div class="list" id="songs"></div></section>
+  <section id="albumsBox" hidden><div class="head"><h2>Albums</h2></div><div class="list" id="albums"></div></section>
+  <section id="videosBox" hidden><div class="head"><h2>From YouTube</h2></div><div class="list" id="videos"></div></section>
+  <footer>
+    <a id="full" href="#">Full Soulseek page</a>
+    <div class="prefs">
+      <span>Motion</span>
+      <div class="seg" id="motion"><button type="button" data-v="on">On</button><button type="button" data-v="off">Off</button></div>
+      <div class="seg" id="speed"><button type="button" data-v="1.6">Slow</button><button type="button" data-v="1">Normal</button><button type="button" data-v="0.6">Fast</button></div>
+    </div>
+  </footer>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite">
+  <span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg></span>
+  <p id="toastText"></p>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const ICON = {
+    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+    tick: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg>',
+    again: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4.5h4.5"/></svg>'
+  };
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem('ms.' + k); return v === null ? d : v; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem('ms.' + k, v); } catch {} }
+  };
+
+  // Motion settings
+  const prefersStill = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function applyMotion() {
+    const on = store.get('motion', prefersStill ? 'off' : 'on') === 'on';
+    const speed = store.get('speed', '1');
+    document.documentElement.classList.toggle('still', !on);
+    document.documentElement.style.setProperty('--speed', on ? speed : '0');
+    for (const b of $('motion').children) b.setAttribute('aria-pressed', String(b.dataset.v === (on ? 'on' : 'off')));
+    for (const b of $('speed').children) b.setAttribute('aria-pressed', String(b.dataset.v === speed));
+  }
+  $('motion').addEventListener('click', e => { const v = e.target.dataset && e.target.dataset.v; if (v) { store.set('motion', v); applyMotion(); } });
+  $('speed').addEventListener('click', e => { const v = e.target.dataset && e.target.dataset.v; if (v) { store.set('speed', v); applyMotion(); } });
+  applyMotion();
+  $('full').href = 'https://' + location.hostname + ':10332/';
+
+  async function api(path, body) {
+    const opt = body === undefined ? { cache: 'no-store' } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+    const r = await fetch(path, opt);
+    if (!r.ok) throw new Error('http ' + r.status);
+    return r.json();
+  }
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const norm = s => (s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
+  // Status line
+  function status(text, busy) { $('statusText').textContent = text; $('status').classList.toggle('busy', !!busy); }
+
+  // Toast
+  let toastTimer = 0;
+  function toast(main, sub) {
+    const p = $('toastText'); p.textContent = main;
+    if (sub) { const s = el('span', '', sub); p.appendChild(s); }
+    $('toast').classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 5200);
+  }
+  $('toast').addEventListener('click', () => $('toast').classList.remove('show'));
+
+  // Notes (start, nothing found, asleep, problems)
+  function notes(list) {
+    const box = $('notes'); box.replaceChildren();
+    for (const n of list) { const d = el('div', 'note ' + (n.kind || '')); d.appendChild(el('b', '', n.title)); d.appendChild(document.createTextNode(n.text)); box.appendChild(d); }
+  }
+
+  // ---------- jobs ----------
+  let jobs = []; const seenReady = new Set(); let firstJobs = true; let jobsTimer = 0;
+  const jobFor = key => jobs.find(j => j.key === key && j.state === 'working') || jobs.find(j => j.key === key);
+
+  function setButton(btn, row, item, job, inLib) {
+    let cls = 'btn add', html = ICON.plus, label = 'Add', disabled = false, pct = 0;
+    if (job && job.state === 'working') { cls = 'btn working'; html = ''; label = 'Adding ' + (job.percent || 0) + '%'; pct = job.percent || 0; disabled = true; }
+    else if (job && job.state === 'ready') { cls = 'btn done'; html = ICON.tick; label = 'Added'; disabled = true; pct = 0; }
+    else if (job && job.state === 'failed') { cls = 'btn retry'; html = ICON.again; label = 'Retry'; }
+    else if (inLib) { cls = 'btn done'; html = ICON.tick; label = 'In library'; disabled = true; }
+    if (item.kind === 'album' && !job && !inLib) label = 'Add album';
+    const sig = cls + '|' + label;
+    if (btn.dataset.sig !== sig) {
+      btn.className = cls; btn.disabled = disabled; btn.innerHTML = html; btn.appendChild(document.createTextNode(label)); btn.dataset.sig = sig;
+      btn.setAttribute('aria-label', label + ': ' + item.title);
+    }
+    const bar = row.querySelector('.bar i'); if (bar) bar.style.width = pct + '%';
+  }
+
+  function renderJobs() {
+    const box = $('jobs');
+    $('jobsBox').hidden = jobs.length === 0;
+    $('clearDone').hidden = !jobs.some(j => j.state !== 'working');
+    const keep = new Set();
+    for (const j of jobs) {
+      const k = 'job' + j.id; keep.add(k);
+      let row = box.querySelector('[data-k="' + k + '"]');
+      if (!row) {
+        row = el('div', 'row enter'); row.dataset.k = k;
+        const info = el('div', 'info'); info.appendChild(el('div', 'title')); info.appendChild(el('div', 'meta'));
+        row.appendChild(info);
+        const btn = el('button', 'btn'); btn.type = 'button'; row.appendChild(btn);
+        const bar = el('div', 'bar'); bar.appendChild(el('i')); row.appendChild(bar);
+        btn.addEventListener('click', () => { const jj = jobs.find(x => 'job' + x.id === k); if (jj && jj.state === 'failed') retry(jj.id); });
+      }
+      row.querySelector('.title').textContent = j.title + (j.artist ? ' · ' + j.artist : '');
+      row.querySelector('.meta').textContent = j.state === 'working' ? j.label + ' · ' + j.source : j.label;
+      row.querySelector('.meta').style.color = j.state === 'ready' ? 'var(--green)' : j.state === 'failed' ? 'var(--red)' : '';
+      setButton(row.querySelector('.btn'), row, { title: j.title, kind: j.kind }, j, false);
+      box.appendChild(row);
+    }
+    for (const r of [...box.children]) if (!keep.has(r.dataset.k)) r.remove();
+  }
+
+  async function pollJobs() {
+    clearTimeout(jobsTimer);
+    try {
+      const r = await api('/api/jobs');
+      jobs = r.jobs || [];
+      for (const j of jobs) {
+        if (j.state === 'ready' && !seenReady.has(j.id)) {
+          seenReady.add(j.id);
+          if (!firstJobs) toast(j.title + ' is in your library.', j.label === 'Ready in Amperfy' ? 'Open Amperfy to play it.' : j.label);
+        }
+      }
+      firstJobs = false;
+      renderJobs(); renderResults();
+    } catch {}
+    if (jobs.some(j => j.state === 'working')) jobsTimer = setTimeout(pollJobs, 1500);
+  }
+
+  async function addItem(item) {
+    try {
+      const r = await api('/api/add', { search: current, result: item.resultId });
+      if (!r.ok) { toastProblem(r.error || 'Could not add that.'); return; }
+    } catch { toastProblem('The laptop did not answer. Try again.'); return; }
+    pollJobs();
+  }
+  async function retry(id) {
+    try { const r = await api('/api/retry', { job: id }); if (!r.ok) toastProblem(r.error || 'Could not start it again.'); } catch { toastProblem('The laptop did not answer.'); }
+    pollJobs();
+  }
+  function toastProblem(text) {
+    const t = $('toast'); t.querySelector('.tick').style.borderColor = 'var(--red)'; t.querySelector('.tick').style.color = 'var(--red)';
+    toast(text);
+    setTimeout(() => { t.querySelector('.tick').style.borderColor = ''; t.querySelector('.tick').style.color = ''; }, 5400);
+  }
+  $('clearDone').addEventListener('click', async () => {
+    const ids = jobs.filter(j => j.state !== 'working').map(j => j.id);
+    try { await api('/api/dismiss', { jobs: ids }); } catch {}
+    pollJobs();
+  });
+
+  // ---------- results ----------
+  let current = 0, snap = null, searchTimer = 0, lastQuery = '';
+
+  function chipsFor(item) {
+    const c = [];
+    if (item.quality) c.push([item.quality, item.lossless ? 'lossless' : '']);
+    if (item.kind === 'album' && item.songs) c.push([item.songs + (item.songs === 1 ? ' song' : ' songs'), '']);
+    if (item.copies > 1) c.push([item.copies + ' people', '']);
+    if (item.duration) c.push([item.duration, '']);
+    return c;
+  }
+
+  function renderList(boxId, items, kind) {
+    const box = $(boxId); const keep = new Set();
+    $(boxId + 'Box').hidden = items.length === 0;
+    for (const raw of items) {
+      const item = Object.assign({ kind }, raw);
+      const k = item.resultId; keep.add(k);
+      let row = null;
+      for (const r of box.children) if (r.dataset.k === k) { row = r; break; }
+      if (!row) {
+        row = el('div', 'row enter'); row.dataset.k = k;
+        const info = el('div', 'info'); info.appendChild(el('div', 'title')); info.appendChild(el('div', 'meta')); info.appendChild(el('div', 'chips'));
+        row.appendChild(info);
+        const btn = el('button', 'btn'); btn.type = 'button'; row.appendChild(btn);
+        const bar = el('div', 'bar'); bar.appendChild(el('i')); row.appendChild(bar);
+        btn.addEventListener('click', () => {
+          const j = jobFor(k);
+          if (j && j.state === 'failed') retry(j.id); else if (!j) addItem({ resultId: k });
+        });
+      }
+      row.querySelector('.title').textContent = item.title || 'Unknown';
+      const meta = kind === 'song' ? [item.artist, item.album].filter(Boolean).join(' · ') : kind === 'album' ? (item.artist || '') : (item.artist || 'YouTube');
+      row.querySelector('.meta').textContent = meta;
+      const chips = row.querySelector('.chips'); const want = chipsFor(item);
+      const sig = JSON.stringify(want);
+      if (chips.dataset.sig !== sig) { chips.replaceChildren(...want.map(([t, c]) => el('span', 'chip ' + c, t))); chips.dataset.sig = sig; chips.hidden = want.length === 0; }
+      setButton(row.querySelector('.btn'), row, item, jobFor(k), item.inLibrary);
+      box.appendChild(row);
+    }
+    for (const r of [...box.children]) if (!keep.has(r.dataset.k)) r.remove();
+  }
+
+  function renderResults() {
+    if (!snap) { renderList('songs', [], 'song'); renderList('albums', [], 'album'); renderList('videos', [], 'video'); return; }
+    renderList('songs', snap.songs || [], 'song');
+    renderList('albums', snap.albums || [], 'album');
+    renderList('videos', snap.videos || [], 'video');
+  }
+
+  function describe() {
+    if (!snap) return;
+    const busy = snap.peersBusy || snap.ytBusy;
+    const n = (snap.songs || []).length + (snap.albums || []).length + (snap.videos || []).length;
+    const list = [];
+    if (snap.asleep) {
+      status('Waking the tower', true);
+      list.push({ kind: 'warn', title: 'The tower is asleep', text: 'Waking it now. This search runs again by itself once it is up, in about a minute.' });
+    } else if (busy) {
+      status(n ? 'Still looking, ' + n + ' found so far' : 'Looking on Soulseek and YouTube', true);
+    } else {
+      status(n ? n + ' found. Tap Add on the one you want.' : 'Nothing found.', false);
+      if (!n) list.push({ title: 'Nothing found', text: 'Try fewer words, or just the artist and song name.' });
+    }
+    if (snap.problem) list.push({ kind: 'bad', title: 'Soulseek trouble', text: snap.problem + ' YouTube results still show below.' });
+    notes(list);
+  }
+
+  async function pollSearch(id) {
+    if (id !== current) return;
+    try {
+      const r = await api('/api/search?id=' + id);
+      if (id !== current) return;
+      if (!r.ok) { status('That search expired. Search again.', false); return; }
+      snap = r; renderResults(); describe();
+      if (r.asleep) { waitForTower(); return; }
+      if (r.peersBusy || r.ytBusy || !r.libDone) setTimeout(() => pollSearch(id), 1000);
+    } catch {
+      status('The laptop did not answer. Trying again.', true);
+      setTimeout(() => pollSearch(id), 2500);
+    }
+  }
+
+  let towerTimer = 0;
+  function waitForTower() {
+    clearTimeout(towerTimer);
+    towerTimer = setTimeout(async () => {
+      try { const s = await api('/api/status'); if (s.tower) { run(lastQuery, true); return; } } catch {}
+      waitForTower();
+    }, 5000);
+  }
+
+  async function run(q, force) {
+    q = q.trim();
+    if (q.length < 2) return;
+    if (!force && norm(q) === norm(lastQuery) && snap) return;
+    lastQuery = q; clearTimeout(towerTimer);
+    status('Looking on Soulseek and YouTube', true); notes([]);
+    try {
+      const r = await api('/api/search', { q });
+      if (!r.ok) { status(r.error || 'Could not search.', false); return; }
+      current = r.id; snap = null; renderResults();
+      pollSearch(r.id);
+    } catch { status('The laptop did not answer. Try again.', false); }
+  }
+
+  const input = $('q');
+  function syncClear() { $('form').classList.toggle('has-text', input.value.length > 0); }
+  input.addEventListener('input', () => {
+    syncClear(); clearTimeout(searchTimer);
+    if (input.value.trim().length >= 2) searchTimer = setTimeout(() => run(input.value), 900);
+  });
+  $('form').addEventListener('submit', e => { e.preventDefault(); clearTimeout(searchTimer); input.blur(); run(input.value, true); });
+  $('clear').addEventListener('click', () => {
+    input.value = ''; syncClear(); clearTimeout(searchTimer); clearTimeout(towerTimer);
+    current = 0; snap = null; lastQuery = ''; renderResults(); notes([]); status('Search for a song, then tap Add.', false); input.focus();
+  });
+
+  notes([{ title: 'How it works', text: 'Type a song or artist. Tap Add and it downloads to your library. You get a notice when it is ready to play in Amperfy.' }]);
+  pollJobs();
+})();
+</script>
+</body>
+</html>
