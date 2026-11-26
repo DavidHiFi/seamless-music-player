@@ -1261,6 +1261,9 @@ body.popup #miniPlayer, body.popup #toasts { display: none !important; }
   position: fixed; inset: 0;
   display: flex; align-items: flex-start; justify-content: flex-start;
 }
+/* the layer only lives in the pop-up window; in the main window it would sit over
+   everything and swallow every click */
+body:not(.popup) .popup-layer { display: none; }
 .pop-surface { position: relative; color: var(--text); }
 .pop-surface::before, .pop-surface::after {
   content: ""; position: absolute; inset: 0; z-index: 3; border-radius: inherit; padding: 2px;
