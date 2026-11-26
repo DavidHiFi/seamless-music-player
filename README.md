@@ -103,6 +103,15 @@ Thanks to everyone who starred it.
 
 - **Author:** Myself, [DavidHiFi](https://github.com/DavidHiFi)
 
+<!-- contributors:start -->
+- **AI coding agents:** [Claude Code](https://github.com/anthropics/claude-code) and Halo Sparks
+
+<p>
+  <a href="https://github.com/DavidHiFi"><img src="https://github.com/DavidHiFi.png?size=96" width="48" height="48" alt="DavidHiFi" title="DavidHiFi"></a>
+  <a href="https://github.com/anthropics/claude-code"><img src="https://github.com/claude.png?size=96" width="48" height="48" alt="Claude Code" title="Claude Code"></a>
+</p>
+<!-- contributors:end -->
+
 | Who | What |
 |---|---|
 | **Digimezzo** ([Dopamine](https://github.com/digimezzo/dopamine)) | The player this one is modelled on: its features, layout and library import. |
