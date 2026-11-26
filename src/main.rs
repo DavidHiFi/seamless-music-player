@@ -740,6 +740,28 @@ fn save_rect(settings: &SettingsFile, window: &Window) {
     settings.update(|s| s.window = Some(r));
 }
 
+/// One line per close or quit in `close.log`, with what was in front and
+/// whether the owner touched anything, so an unexpected close can be traced.
+fn log_close(why: &str) {
+    use std::io::Write;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    let (mut fg_pid, mut idle_ms) = (0u32, 0u64);
+    unsafe {
+        let fg = GetForegroundWindow();
+        GetWindowThreadProcessId(fg, Some(&mut fg_pid));
+        let mut li = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+        if GetLastInputInfo(&mut li).as_bool() {
+            idle_ms = windows::Win32::System::SystemInformation::GetTickCount().wrapping_sub(li.dwTime) as u64;
+        }
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let p = app_dir().join("close.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+        let _ = writeln!(f, "{now} {why} front_pid={fg_pid} own_pid={} idle_ms={idle_ms}", std::process::id());
+    }
+}
+
 fn close_requested(settings: &SettingsFile, window: &Window, webview: &WebView, proxy: &Proxy, cf: &mut ControlFlow, tray: &mut Option<TrayIcon>, player: &Arc<Player>, quit: bool) {
     if !quit && settings.settings.lock().unwrap().close_to_tray {
         hide(window, webview, settings, proxy);
@@ -1041,6 +1063,7 @@ fn main() {
             }
             Event::UserEvent(UserEvent::Show) => show(&window, &webview, &settings, &anim_proxy),
             Event::UserEvent(UserEvent::Quit) => {
+                log_close("quit-event");
                 close_requested(&settings, &window, &webview, &anim_proxy, cf, &mut tray, &player, true);
             }
             Event::UserEvent(UserEvent::Tray(TrayIconEvent::Click {
@@ -1068,6 +1091,7 @@ fn main() {
                     let _ = player.prev();
                 }
                 "quit" => {
+                    log_close("tray-quit");
                     close_requested(&settings, &window, &webview, &anim_proxy, cf, &mut tray, &player, true);
                 }
                 _ => {}
@@ -1096,6 +1120,7 @@ fn main() {
                     }
                     "window.close" => {
                         reply(&events, id, true, json!({ "ok": true }));
+                        log_close("page-close-button");
                         close_requested(&settings, &window, &webview, &anim_proxy, cf, &mut tray, &player, false);
                     }
                     "window.startDrag" => {
@@ -1237,6 +1262,7 @@ fn main() {
             Event::WindowEvent { window_id, .. } if window_id == popup_window.id() => {}
             Event::WindowEvent { window_id, .. } if window_id == toast_window.id() => {}
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                log_close("window-close-message");
                 close_requested(&settings, &window, &webview, &anim_proxy, cf, &mut tray, &player, false);
             }
             Event::WindowEvent { event: WindowEvent::Moved(_), .. } => {

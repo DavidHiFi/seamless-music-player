@@ -112,7 +112,7 @@ impl Player {
                 state.playing = false;
             }
         }
-        engine.shared.volume.store((state.volume as f32).to_bits(), Ordering::Relaxed);
+        engine.set_volume(state.volume as f32);
         let sleep = Sleep {
             deadline: state
                 .sleep_timer
@@ -397,7 +397,7 @@ impl Player {
     pub fn set_volume(&self, v: f64) -> Result<Value, String> {
         let v = v.clamp(0.0, 1.0);
         self.settings.update(|s| s.volume = v);
-        self.engine.shared.volume.store((v as f32).to_bits(), Ordering::Relaxed);
+        self.engine.set_volume(v as f32);
         {
             let mut st = self.state.lock().unwrap();
             st.volume = v;

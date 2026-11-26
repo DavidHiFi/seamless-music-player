@@ -12,7 +12,7 @@ use crate::audio::viz::{Viz, BARS};
 use crate::settings::SettingsFile;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -73,13 +73,17 @@ impl Ledger {
 
 pub struct EngineShared {
     pub ledger: Mutex<Ledger>,
+    /// The live output's gain state. It changes whenever the device is
+    /// reopened, so readers always go through here.
+    pub cur: Mutex<Arc<Shared>>,
+    /// Volume, f32 bits: carried over to every new output.
+    pub volume: AtomicU32,
     pub bars: Mutex<[f32; BARS]>,
     pub device: Mutex<(String, u32, bool)>,
 }
 
 pub struct Engine {
     tx: Sender<Cmd>,
-    pub shared: Arc<Shared>,
     pub state: Arc<EngineShared>,
     pub events: Mutex<Receiver<EngineEv>>,
 }
@@ -105,13 +109,17 @@ struct Worker {
     chunk: Vec<f32>,
     mix_buf: Vec<f32>,
     out_buf: Vec<f32>,
+    /// A command that arrived while the last track drained; run it next.
+    pending: Option<Cmd>,
 }
 
 impl Worker {
-    fn open_output(&mut self, preferred: Option<String>) -> bool {
+    /// Opens the device. The caller keeps the returned stream alive: once it
+    /// is dropped the device goes silent.
+    fn open_output(&mut self, preferred: Option<String>) -> Option<output::Output> {
         match output::open(preferred.as_deref()) {
             Ok(o) => {
-                let vol = self.shared.volume.load(Ordering::Relaxed);
+                let vol = self.state.volume.load(Ordering::Relaxed);
                 o.shared.volume.store(vol, Ordering::Relaxed);
                 o.shared.fade_target.store(0.0f32.to_bits(), Ordering::Relaxed);
                 self.out_rate = o.rate;
@@ -127,6 +135,7 @@ impl Worker {
                 };
                 let _ = pos;
                 self.shared = Arc::clone(&o.shared);
+                *self.state.cur.lock().unwrap() = Arc::clone(&o.shared);
                 o.shared.swap_ring(Arc::new(crate::audio::ring::Ring::new(
                     o.rate as usize * o.channels as usize / 4,
                     o.channels as usize,
@@ -138,17 +147,25 @@ impl Worker {
                         Resampler::new(44100, o.rate, 2).unwrap()
                     }));
                 }
+                if let Some((_, ref nd, ref mut nres, _)) = self.next {
+                    *nres = Resampler::new(nd.info.sample_rate, o.rate, 2)
+                        .unwrap_or_else(|_| Resampler::new(44100, o.rate, 2).unwrap());
+                }
                 *self.state.device.lock().unwrap() =
                     (o.device_name.clone(), o.rate, true);
                 let _ = self.ev.send(EngineEv::Device { name: o.device_name.clone(), rate: o.rate, ok: true });
-                true
+                // A track that was already loaded carries on at the new rate.
+                if self.playing && self.dec.is_some() {
+                    o.shared.fade_target.store(1.0f32.to_bits(), Ordering::Relaxed);
+                }
+                Some(o)
             }
             Err(e) => {
                 eprintln!("output: {e}");
                 self.shared.alive.store(false, Ordering::Relaxed);
                 *self.state.device.lock().unwrap() = (String::new(), 0, false);
                 let _ = self.ev.send(EngineEv::Device { name: String::new(), rate: 0, ok: false });
-                false
+                None
             }
         }
     }
@@ -167,6 +184,8 @@ impl Worker {
                 }
                 let (rg_t, rg_a) = (d.info.rg_track, d.info.rg_album);
                 self.dsp.set_rg_gains(rg_t, rg_a);
+                self.dsp.set_rate(d.info.sample_rate);
+                self.mix_buf.clear();
                 let dur = d.info.duration;
                 self.res = Some(
                     Resampler::new(d.info.sample_rate, self.out_rate, 2)
@@ -199,7 +218,7 @@ impl Worker {
                 Ok(d) => {
                     let res = Resampler::new(d.info.sample_rate, self.out_rate, 2)
                         .unwrap_or_else(|_| Resampler::new(44100, self.out_rate, 2).unwrap());
-                    let mut nd = Dsp::new(self.out_rate);
+                    let mut nd = Dsp::new(d.info.sample_rate);
                     let s = self.settings.settings.lock().unwrap();
                     nd.set_eq(s.eq_enabled, &s.eq_gains);
                     nd.set_replaygain(&s.replaygain, s.preamp_db);
@@ -224,9 +243,29 @@ impl Worker {
             None => return false,
         };
         let in_chunk = self.res.as_ref().map(|r| r.input_chunk()).unwrap_or(2048);
+        // Decode only when the ring has room for what comes out, so no
+        // decoded audio is ever thrown away.
+        let (room, cap) = {
+            let r = self.shared.ring.read().unwrap();
+            (r.free_frames(), r.capacity_frames())
+        };
+        let ratio = self.out_rate as f64 / dec.info.sample_rate.max(1) as f64;
+        let need = (((in_chunk.max(4096) as f64) * ratio * 1.5) as usize + 256)
+            .min((cap * 3 / 4).max(256));
+        if room < need {
+            return false;
+        }
         self.chunk.clear();
         let mut eof = false;
         let stereo = if dec.next_chunk(&mut self.chunk) {
+            let sr = dec.info.sample_rate;
+            if self.res.as_ref().map(|r| r.from_rate()) != Some(sr) {
+                self.dsp.set_rate(sr);
+                self.res = Some(
+                    Resampler::new(sr, self.out_rate, 2)
+                        .unwrap_or_else(|_| Resampler::new(44100, self.out_rate, 2).unwrap()),
+                );
+            }
             let mut stereo = to_stereo(&self.chunk, dec.info.channels);
             self.dsp.process(&mut stereo);
             stereo
@@ -242,6 +281,13 @@ impl Worker {
         };
         let pos = dec.frames_out as f64 / dec.info.sample_rate as f64;
         let remaining = dec.info.duration - pos;
+        if eof && self.xfading {
+            // The outgoing track ran out mid-fade: finish the switch now.
+            let tail = self.res.as_mut().map(|r| r.flush(&[])).unwrap_or_default();
+            let out = self.mix_crossfade(tail, fade, true);
+            self.write(&out);
+            return true;
+        }
         if eof && !self.xfading {
             if let Some((_, nd, nres, _)) = self.next.take() {
                 // Gapless step: the decoder becomes the next track; the ring
@@ -249,6 +295,7 @@ impl Worker {
                 let dur = nd.info.duration;
                 let (rg_t, rg_a) = (nd.info.rg_track, nd.info.rg_album);
                 self.dsp.set_rg_gains(rg_t, rg_a);
+                self.dsp.set_rate(nd.info.sample_rate);
                 self.res = Some(nres);
                 self.dec = Some(nd);
                 let elapsed = pos;
@@ -277,14 +324,11 @@ impl Worker {
             }
         }
 
-        let stereo = if self.xfading {
-            self.mix_crossfade(stereo, fade)
-        } else {
-            stereo
-        };
-
         if !stereo.is_empty() {
-            let out = self.res.as_mut().map(|r| r.process(&stereo)).unwrap_or_default();
+            let mut out = self.res.as_mut().map(|r| r.process(&stereo)).unwrap_or_default();
+            if self.xfading {
+                out = self.mix_crossfade(out, fade, false);
+            }
             self.write(&out);
             // Viz bars from the device-rate stream.
             if self.viz_on {
@@ -300,54 +344,54 @@ impl Worker {
         }
     }
 
-    /// Mix the outgoing and incoming streams over the crossfade window.
-    fn mix_crossfade(&mut self, cur: Vec<f32>, fade: f64) -> Vec<f32> {
+    /// Mix the incoming track into the outgoing one over the crossfade
+    /// window. Both are already at the device rate: `cur` came out of the
+    /// current resampler, and the next track is pulled through its own
+    /// resampler into `mix_buf` until it covers the same frames.
+    fn mix_crossfade(&mut self, cur: Vec<f32>, fade: f64, force: bool) -> Vec<f32> {
         let dec = self.dec.as_ref().expect("xfade without a decoder");
-        let fade_frames = (fade * dec.info.sample_rate as f64) as usize;
-        let pos_frames = dec.frames_out as usize;
-        let done = pos_frames.min(fade_frames) as f64 / fade_frames.max(1) as f64;
-        let (g_out, _g_in) = crossfade_gains(done);
-        let mut next_chunk = Vec::new();
-        let mut switched = false;
-        if let Some((_, nd, _, _)) = self.next.as_mut() {
-            if nd.next_chunk(&mut next_chunk) {
-                let mut ns = to_stereo(&next_chunk, nd.info.channels);
-                if let Some((_, _, _, n_dsp)) = self.next.as_mut() {
-                    n_dsp.process(&mut ns);
+        let remaining = (dec.info.duration - dec.frames_out as f64 / dec.info.sample_rate.max(1) as f64).max(0.0);
+        let done = if fade > 0.0 { (1.0 - remaining / fade).clamp(0.0, 1.0) } else { 1.0 };
+        let (g_out, g_in) = crossfade_gains(done);
+        let mut next_ended = false;
+        if let Some((_, nd, nres, ndsp)) = self.next.as_mut() {
+            let mut raw = Vec::new();
+            while self.mix_buf.len() < cur.len() {
+                raw.clear();
+                if !nd.next_chunk(&mut raw) {
+                    next_ended = true;
+                    break;
                 }
-                self.mix_buf = ns;
-            } else {
-                self.mix_buf.clear();
-                switched = true;
-            }
-        } else {
-            self.mix_buf.clear();
-        }
-        // Resample the incoming stream to the device rate with its own
-        // resampler, then match frame counts with the outgoing stream.
-        let mut out = cur.clone();
-        if !self.mix_buf.is_empty() {
-            if let Some((_, _, nres, _)) = self.next.as_mut() {
-                let n_out = nres.process(&self.mix_buf);
-                let frames = (out.len() / 2).min(n_out.len() / 2);
-                let (_, g_in) = crossfade_gains(done);
-                for f in 0..frames {
-                    out[f * 2] = out[f * 2] * g_out as f32 + n_out[f * 2] * g_in as f32;
-                    out[f * 2 + 1] =
-                        out[f * 2 + 1] * g_out as f32 + n_out[f * 2 + 1] * g_in as f32;
-                }
+                let mut ns = to_stereo(&raw, nd.info.channels);
+                ndsp.process(&mut ns);
+                let o = nres.process(&ns);
+                self.mix_buf.extend_from_slice(&o);
             }
         }
-        if switched || done >= 1.0 {
-            // The fade is over: the incoming track becomes the current one.
-            if let Some((p, nd, nres, ndsp)) = self.next.take() {
+        let mut out = cur;
+        let frames = (out.len() / 2).min(self.mix_buf.len() / 2);
+        for f in 0..frames {
+            out[f * 2] = out[f * 2] * g_out as f32 + self.mix_buf[f * 2] * g_in as f32;
+            out[f * 2 + 1] = out[f * 2 + 1] * g_out as f32 + self.mix_buf[f * 2 + 1] * g_in as f32;
+        }
+        self.mix_buf.drain(..frames * 2);
+        if force || next_ended || done >= 1.0 {
+            // The fade is over: the incoming track becomes the current one,
+            // and whatever of it is already converted plays straight after.
+            if let Some((_, nd, nres, ndsp)) = self.next.take() {
                 let dur = nd.info.duration;
-                let _ = p;
+                out.extend_from_slice(&self.mix_buf);
+                let queued = self.mix_buf.len() / 2;
+                self.mix_buf.clear();
+                let at = (nd.frames_out as f64 / nd.info.sample_rate.max(1) as f64
+                    - (out.len() / 2) as f64 / self.out_rate.max(1) as f64)
+                    .max(0.0);
+                let _ = queued;
                 self.dsp = ndsp;
                 self.res = Some(nres);
                 self.dec = Some(nd);
                 self.xfading = false;
-                self.state.ledger.lock().unwrap().mark(self.written, 0.0);
+                self.state.ledger.lock().unwrap().mark(self.written, at);
                 let _ = self.ev.send(EngineEv::Switched { duration: dur, elapsed: done * fade, crossfaded: true });
                 self.next_path = None;
             }
@@ -368,9 +412,9 @@ impl Worker {
     fn drain_or_end(&mut self, elapsed: f64) {
         // Let the device play the last buffered frames, then end.
         loop {
-            if self.rx.try_recv().is_ok() {
-                // A new command arrived mid-drain; leave the end to it.
-                let _ = elapsed;
+            if let Ok(cmd) = self.rx.try_recv() {
+                // A new command arrived mid-drain; it takes over the end.
+                self.pending = Some(cmd);
                 return;
             }
             let used = self.shared.ring.read().unwrap().used_frames();
@@ -389,12 +433,21 @@ impl Worker {
 /// wakes a few dozen times a second while playing.
 fn run(mut w: Worker) {
     let mut dead_since: Option<Instant> = None;
+    // The stream lives on this thread for as long as the worker runs.
+    let pref = w.settings.settings.lock().unwrap().device_id.clone();
+    let mut out = w.open_output(pref);
     loop {
+        if let Some(cmd) = w.pending.take() {
+            if !handle(&mut w, cmd, &mut out) {
+                return;
+            }
+            continue;
+        }
         // Block when there is nothing to play; otherwise poll lightly.
         if !w.playing || w.dec.is_none() {
             match w.rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(cmd) => {
-                    if !handle(&mut w, cmd) {
+                    if !handle(&mut w, cmd, &mut out) {
                         return;
                     }
                     continue;
@@ -405,7 +458,7 @@ fn run(mut w: Worker) {
         }
         match w.rx.try_recv() {
             Ok(cmd) => {
-                if !handle(&mut w, cmd) {
+                if !handle(&mut w, cmd, &mut out) {
                     return;
                 }
                 continue;
@@ -419,7 +472,8 @@ fn run(mut w: Worker) {
             if dead_since.map(|t| t.elapsed() > Duration::from_secs(2)).unwrap_or(true) {
                 dead_since = Some(Instant::now());
                 let pref = w.settings.settings.lock().unwrap().device_id.clone();
-                w.open_output(pref);
+                out = None;
+                out = w.open_output(pref);
             }
             std::thread::sleep(Duration::from_millis(100));
             continue;
@@ -448,7 +502,7 @@ fn run(mut w: Worker) {
 }
 
 /// Handle one command. Returns false when the worker should exit.
-fn handle(w: &mut Worker, cmd: Cmd) -> bool {
+fn handle(w: &mut Worker, cmd: Cmd, out: &mut Option<output::Output>) -> bool {
     match cmd {
         Cmd::Exit => return false,
         Cmd::Play { path, seek } => {
@@ -480,7 +534,7 @@ fn handle(w: &mut Worker, cmd: Cmd) -> bool {
                 w.state.ledger.lock().unwrap().mark(0, seconds);
                 w.xfading = false;
                 if let Some(r) = w.res.as_mut() {
-                    let _ = r.flush(&[]);
+                    r.reset();
                 }
             }
         }
@@ -507,7 +561,9 @@ fn handle(w: &mut Worker, cmd: Cmd) -> bool {
         }
         Cmd::Reopen => {
             let pref = w.settings.settings.lock().unwrap().device_id.clone();
-            w.open_output(pref);
+            // Let go of the old device before taking the new one.
+            *out = None;
+            *out = w.open_output(pref);
         }
     }
     true
@@ -528,6 +584,8 @@ impl Engine {
         let shared = Shared::new(rate, ch, rate as usize * ch as usize / 4);
         let state = Arc::new(EngineShared {
             ledger: Mutex::new(Ledger::new()),
+            cur: Mutex::new(Arc::clone(&shared)),
+            volume: AtomicU32::new(1.0f32.to_bits()),
             bars: Mutex::new([0.0; BARS]),
             device: Mutex::new((String::new(), 0, false)),
         });
@@ -551,21 +609,18 @@ impl Engine {
             chunk: Vec::new(),
             mix_buf: Vec::new(),
             out_buf: Vec::new(),
+            pending: None,
         };
         {
             let s = settings.settings.lock().unwrap();
             w.dsp.set_eq(s.eq_enabled, &s.eq_gains);
             w.dsp.set_replaygain(&s.replaygain, s.preamp_db);
         }
-        {
-            let pref = settings.settings.lock().unwrap().device_id.clone();
-            w.open_output(pref);
-        }
         std::thread::Builder::new()
             .name("smp-audio".into())
             .spawn(move || run(w))
             .ok();
-        Engine { tx, shared, state, events: Mutex::new(ev_rx) }
+        Engine { tx, state, events: Mutex::new(ev_rx) }
     }
 
     pub fn play(&self, path: &Path, seek: f64) {
@@ -599,10 +654,21 @@ impl Engine {
         let _ = self.tx.send(Cmd::Exit);
     }
 
+    /// Volume 0 to 1, on the live device and every later one.
+    pub fn set_volume(&self, v: f32) {
+        self.state.volume.store(v.to_bits(), Ordering::Relaxed);
+        self.cur().volume.store(v.to_bits(), Ordering::Relaxed);
+    }
+
+    fn cur(&self) -> Arc<Shared> {
+        Arc::clone(&self.state.cur.lock().unwrap())
+    }
+
     /// Seconds inside the current track, from the device's own frame count.
     pub fn position(&self) -> f64 {
-        let rate = self.shared.rate.load(Ordering::Relaxed).max(1);
-        let consumed = self.shared.played_frames();
+        let cur = self.cur();
+        let rate = cur.rate.load(Ordering::Relaxed).max(1);
+        let consumed = cur.played_frames();
         self.state.ledger.lock().unwrap().position(consumed, rate)
     }
 
@@ -616,6 +682,6 @@ impl Engine {
 
     /// True when the output stream has signalled an error (device gone).
     pub fn output_dead(&self) -> bool {
-        !self.shared.alive.load(Ordering::Relaxed)
+        !self.cur().alive.load(Ordering::Relaxed)
     }
 }

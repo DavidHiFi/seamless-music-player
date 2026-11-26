@@ -149,6 +149,12 @@ impl Decoder {
             if decoded.frames() == 0 {
                 continue;
             }
+            let spec = *decoded.spec();
+            let ch = spec.channels.count().max(1);
+            self.info.channels = ch;
+            if spec.rate > 0 {
+                self.info.sample_rate = spec.rate;
+            }
             let need = decoded.capacity() as usize;
             let reuse = self
                 .sample_buf
@@ -158,15 +164,14 @@ impl Decoder {
             if !reuse {
                 self.sample_buf = Some(SampleBuffer::<f32>::new(
                     decoded.capacity() as u64,
-                    *decoded.spec(),
+                    spec,
                 ));
             }
             let buf = self.sample_buf.as_mut().unwrap();
-            let frames = decoded.frames() as usize;
             buf.copy_interleaved_ref(decoded);
-            let n = frames * self.info.channels;
-            out.extend_from_slice(&buf.samples()[..n]);
-            self.frames_out += n as u64 / self.info.channels as u64;
+            let samples = buf.samples();
+            out.extend_from_slice(samples);
+            self.frames_out += (samples.len() / ch) as u64;
             return true;
         }
     }

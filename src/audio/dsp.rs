@@ -81,6 +81,15 @@ impl Dsp {
         d
     }
 
+    /// The EQ runs before resampling, so it follows each file's own rate.
+    pub fn set_rate(&mut self, rate: u32) {
+        let r = rate.max(1) as f64;
+        if (r - self.rate).abs() > 0.5 {
+            self.rate = r;
+            self.rebuild_eq();
+        }
+    }
+
     pub fn set_eq(&mut self, enabled: bool, gains: &[f64]) {
         let mut g = [0.0f64; 10];
         for (i, v) in gains.iter().take(10).enumerate() {

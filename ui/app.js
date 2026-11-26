@@ -57,6 +57,7 @@ const ICONS = {
   minimize: '<rect x="4.5" y="4.5" width="15" height="15" rx="2"/><path d="M9.5 4.5v15"/>',
   minus: '<path d="M5.5 12h13"/>',
   "chevron-down": '<path d="m6 9.5 6 6 6-6"/>',
+  "chevron-up": '<path d="m6 14.5 6-6 6 6"/>',
   "chevron-right": '<path d="m9.5 6 6 6-6 6"/>',
   "chevron-left": '<path d="m14.5 6-6 6 6 6"/>',
   download: '<path d="M12 4v10"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 19.5h14"/>',
@@ -353,9 +354,6 @@ function stateBox(kind, iconName, title, text, actionLabel, onAction) {
 }
 
 /* ---------- play helpers ---------- */
-async function playFromList(trackIds, startIndex) {
-  await IPC.call("player.play", { trackIds, startIndex: startIndex || 0 });
-}
 async function playTracksOf(list) {
   await playFromList(list.map((t) => t.id), 0);
 }
@@ -491,7 +489,7 @@ function renderPage() {
     search: screenSearch, artist: screenArtist, album: screenAlbum, genre: screenGenre,
     playlist: screenPlaylist,
   }[S.page] || screenHome;
-  fn(root, token).catch((err) => {
+  return fn(root, token).catch((err) => {
     if (token !== S.renderToken) return;
     root.innerHTML = "";
     root.appendChild(stateBox("error", "warning", "This page did not load", String(err && err.message || err), "Try again", () => renderPage()));
@@ -642,19 +640,28 @@ function emptyLibraryBox() {
 const SONG_COLS = [
   ["num", "#"], ["art", ""], ["title", "Title"], ["artist", "Artists"], ["album", "Album"],
   ["genres", "Genres"], ["year", "Year"], ["dur", "Time"], ["rating", "Rating"], ["plays", "Plays"], ["love", "Loved"],
+  ["added", "Date added"], ["modified", "Date modified"],
 ];
-const SORTABLE = { title: "Title", artist: "Artists", album: "Album", year: "Year", duration: "Time", rating: "Rating", playCount: "Plays", dateAdded: "Date added" };
+const SORTABLE = { title: "Title", artist: "Artists", album: "Album", year: "Year", duration: "Time", rating: "Rating", playCount: "Plays", dateAdded: "Date added", dateModified: "Date modified" };
+const COL_SORT = { artist: "artist", album: "album", year: "year", dur: "duration", rating: "rating", plays: "playCount", title: "title", added: "dateAdded", modified: "dateModified" };
+function fmtDate(v) {
+  if (!v) return "";
+  const ms = v > 1e12 ? v : v * 1000;
+  const d = new Date(ms);
+  if (isNaN(d)) return "";
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
 const ROW_H = 30, PAGE_N = 200;
 
 async function screenSongs(root, token) {
   S.selection.clear(); S.anchor = null;
-  if (!S.songsCols) S.songsCols = ["num", "art", "title", "artist", "album", "genres", "year", "dur", "rating", "plays", "love"];
+  if (!S.songsCols) S.songsCols = ["num", "art", "title", "artist", "album", "genres", "year", "dur", "rating", "plays", "love", "added"];
   S.songs = { total: 0, cache: new Map(), fetched: new Set() };
 
   const tools = el("div", "songs-tools");
   const shuffle = el("button", "btn", icon("shuffle") + "Shuffle all");
   shuffle.addEventListener("click", async () => {
-    const all = await IPC.call("library.tracks", { sort: S.songsSort, offset: 0, limit: 50000 });
+    const all = await IPC.call("library.tracks", { sort: S.songsSort + ":" + S.songsDir, offset: 0, limit: 50000 });
     if (all && all.items) playFromList(all.items.map((t) => t.id), Math.floor(Math.random() * all.items.length));
   });
   const colsBtn = el("button", "btn", icon("columns") + "Columns");
@@ -669,17 +676,21 @@ async function screenSongs(root, token) {
     const d = el("div");
     if (c === "art") { d.innerHTML = "&nbsp;"; d.style.flex = "0 0 34px"; }
     else {
-      const key = { artist: "artist", album: "album", year: "year", dur: "duration", rating: "rating", plays: "playCount", title: "title" }[c];
+      const key = COL_SORT[c];
       const label = (SONG_COLS.find(([k]) => k === c) || [, c])[1] || "Title";
-      const cls = { num: "c-num", dur: "c-dur", rating: "c-rate", plays: "c-plays", love: "c-love" }[c];
+      const cls = { num: "c-num", dur: "c-dur", rating: "c-rate", plays: "c-plays", love: "c-love", added: "c-date", modified: "c-date", album: "c-album", title: "c-title", artist: "c-artist" }[c];
       if (cls) d.className = cls;
-      d.innerHTML = `${esc(label)}${key && S.songsSort === key ? '<span class="arrow">' + (S.songsDir === "asc" ? "▲" : "▼") + "</span>" : ""}`;
+      const on = key && S.songsSort === key;
+      d.innerHTML = `<span class="h-label">${esc(label)}</span>${on ? '<span class="arrow">' + icon(S.songsDir === "asc" ? "chevron-up" : "chevron-down") + "</span>" : ""}`;
       if (key && SORTABLE[key]) {
         headMap[key] = d;
+        d.classList.add("sortable");
+        d.tabIndex = 0;
+        d.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); d.click(); } });
         d.title = "Sort by " + SORTABLE[key];
         d.addEventListener("click", () => {
           if (S.songsSort === key) S.songsDir = S.songsDir === "asc" ? "desc" : "asc";
-          else { S.songsSort = key; S.songsDir = "asc"; }
+          else { S.songsSort = key; S.songsDir = (key === "dateAdded" || key === "dateModified" || key === "playCount" || key === "rating") ? "desc" : "asc"; }
           renderPage();
         });
         if (S.songsSort === key) d.classList.add("sort");
@@ -733,8 +744,8 @@ function songRow(t, i) {
         break;
       }
       case "title": d.className = "c-title"; d.textContent = t.title; break;
-      case "artist": d.textContent = (t.artists || []).join(", "); break;
-      case "album": d.textContent = t.album || ""; break;
+      case "artist": d.className = "c-artist"; d.textContent = (t.artists || []).join(", "); break;
+      case "album": d.className = "c-album"; d.textContent = t.album || ""; break;
       case "genres": d.textContent = (t.genres || []).join(", "); break;
       case "year": d.textContent = t.year || ""; break;
       case "dur": d.className = "c-dur"; d.textContent = fmtTime(t.duration); break;
@@ -745,6 +756,8 @@ function songRow(t, i) {
       }
       case "plays": d.className = "c-plays"; d.textContent = fmtPlays(t.playCount); break;
       case "love": d.className = "c-love"; d.innerHTML = t.love ? icon("heart", "badge-love") : ""; break;
+      case "added": d.className = "c-date"; d.textContent = fmtDate(t.dateAdded); break;
+      case "modified": d.className = "c-date"; d.textContent = fmtDate(t.dateModified); break;
     }
     r.appendChild(d);
   }
@@ -755,7 +768,7 @@ function songRow(t, i) {
   });
   r.addEventListener("contextmenu", (e) => {
     e.preventDefault();
-    if (!S.selection.has(t.id)) { S.selection.clear(); S.selection.add(t.id); S.anchor = i; S.songsRender && S.songsRender(); }
+    if (!S.selection.has(t.id)) { S.selection.clear(); S.selection.add(t.id); S.anchor = i; markSelection(); }
     const ctx = { playlist: false };
     trackMenu([...S.selection], e.clientX, e.clientY, ctx);
   });
@@ -793,13 +806,32 @@ function songsClick(e, i, id) {
   } else {
     S.selection.clear(); S.selection.add(id); S.anchor = i;
   }
-  S.songsRender && S.songsRender();
+  markSelection();
 }
-function playFromList(trackIds, startIndex) {
+function markSelection() {
+  document.querySelectorAll("#page .tbl-row[data-id]").forEach((r) => {
+    r.classList.toggle("sel", S.selection.has(Number(r.dataset.id)));
+  });
+}
+/* Plays a list from one song. With no list it plays the songs table in its
+   current order: the table only holds the rows seen so far, so when rows are
+   missing the whole order is asked for, and the start is found by song. */
+async function playFromList(trackIds, startIndex) {
   if (trackIds == null) {
-    const ids = [];
-    for (let k = 0; k < S.songs.total; k++) { const t = S.songs.cache.get(k); if (t) ids.push(t.id); }
+    const want = S.songs.cache.get(startIndex);
+    let ids = [];
+    for (let k = 0; k < S.songs.total; k++) {
+      const t = S.songs.cache.get(k);
+      if (!t) { ids = null; break; }
+      ids.push(t.id);
+    }
+    if (!ids) {
+      const all = await IPC.call("library.tracks", { sort: S.songsSort + ":" + S.songsDir, offset: 0, limit: 50000 });
+      ids = ((all && all.items) || []).map((t) => t.id);
+    }
+    const at = want ? ids.indexOf(want.id) : startIndex;
     trackIds = ids;
+    startIndex = at >= 0 ? at : 0;
   }
   return IPC.call("player.play", { trackIds, startIndex: startIndex || 0 });
 }
@@ -1793,13 +1825,33 @@ function onPlayerState(st) {
   if (trackChanged) {
     S.lyrics = { trackId: null, data: null, lines: null, now: -1 };
     if (S.np) { updateNpInfo(); loadLyrics(); }
-    document.querySelectorAll(".rows .row, .tbl-row").forEach(() => {});
-    renderPage();
+    markPlaying();
+    if (S.queueOpen) renderQueue();
   }
   updateLyrics();
 }
+/* Move the playing highlight in place: no rebuild, so nothing flashes. */
+function markPlaying() {
+  const id = S.player.track && S.player.track.id;
+  document.querySelectorAll("#page .row[data-id], #page .tbl-row[data-id]").forEach((r) => {
+    r.classList.toggle("playing", id != null && String(id) === r.dataset.id);
+  });
+}
 function wireEvents() {
   IPC.on("player.state", onPlayerState);
+  // The clock and progress line move four times a second while a song plays.
+  IPC.on("player.position", (p) => {
+    if (!p) return;
+    S.player.position = p.position || 0;
+    if (p.duration) S.player.duration = p.duration;
+    if (!$("#wave").classList.contains("dragging")) {
+      $("#posCur").textContent = fmtTime(S.player.position);
+      $("#posTotal").textContent = fmtTime(S.player.duration);
+      updateWave();
+    }
+    $("#miniFill").style.width = (S.player.duration ? (S.player.position / S.player.duration) * 100 : 0) + "%";
+    updateLyrics();
+  });
   IPC.on("popup.picked", (p) => {
     if (!p) return;
     const w = popupWaiters.get(p.token);
@@ -1816,7 +1868,12 @@ function wireEvents() {
   IPC.on("library.changed", async () => {
     S.overview = await IPC.call("library.overview");
     S.songs && S.songs.cache && (S.songs = { total: 0, cache: new Map(), fetched: new Set() });
-    renderPage();
+    // Keep the reader's place in the list when a scan finishes.
+    const sc = document.querySelector("#page .tbl-scroll");
+    const top = sc ? sc.scrollTop : 0;
+    await renderPage();
+    const sc2 = document.querySelector("#page .tbl-scroll");
+    if (sc2 && top) sc2.scrollTop = top;
   });
   IPC.on("scan.progress", (p) => {
     S.scan = p;

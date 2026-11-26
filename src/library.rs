@@ -121,6 +121,7 @@ impl Library {
             "playCount": row.get::<_, i64>("play_count").unwrap_or(0),
             "skipCount": row.get::<_, i64>("skip_count").unwrap_or(0),
             "dateAdded": row.get::<_, Option<i64>>("date_added").unwrap_or(None),
+            "dateModified": row.get::<_, Option<i64>>("mtime").unwrap_or(None),
             "lastPlayed": row.get::<_, Option<i64>>("last_played").unwrap_or(None),
             "artworkId": row.get::<_, Option<String>>("artwork_id").unwrap_or(None),
         })
@@ -243,14 +244,19 @@ impl Library {
     }
 
     /// The sort ORDER BY for the songs table. `sort` is a key, optionally with
-    /// `:desc` on the end to turn the main column round (ties keep their order).
+    /// `:asc` or `:desc` on the end. With no direction each key uses its
+    /// natural one (newest, most played and best rated first).
     fn track_order(sort: &str) -> String {
-        let (key, dir) = sort.split_once(':').unwrap_or((sort, "asc"));
+        let (key, dir) = match sort.split_once(':') {
+            Some((k, d)) => (k, Some(d)),
+            None => (sort, None),
+        };
         let (main, main_desc, rest) = match key {
             "artist" => ("artists COLLATE NOCASE", false, "album COLLATE NOCASE, disc_no, track_no, title COLLATE NOCASE"),
             "album" => ("album COLLATE NOCASE", false, "disc_no, track_no, title COLLATE NOCASE"),
             "year" => ("year", false, "album COLLATE NOCASE, disc_no, track_no"),
             "dateAdded" => ("date_added", true, "id DESC"),
+            "dateModified" => ("mtime", true, "id DESC"),
             "datePlayed" => ("last_played", true, "id DESC"),
             "rating" => ("rating", true, "title COLLATE NOCASE"),
             "playCount" => ("play_count", true, "title COLLATE NOCASE"),
@@ -258,7 +264,10 @@ impl Library {
             "path" => ("path COLLATE NOCASE", false, "id"),
             _ => ("title COLLATE NOCASE", false, "album COLLATE NOCASE, disc_no, track_no"),
         };
-        let desc = main_desc != (dir == "desc");
+        let desc = match dir {
+            Some(d) => d == "desc",
+            None => main_desc,
+        };
         format!("{main}{}, {rest}", if desc { " DESC" } else { "" })
     }
 
@@ -517,7 +526,7 @@ impl Library {
                 .map_err(|e| e.to_string())?;
         }
         self.events.emit("library.changed", json!({}));
-        Ok(json!({ "ok": true }))
+        Ok(json!({ "ok": true, "path": path }))
     }
 
     pub fn remove_folder(&self, id: i64) -> Result<Value, String> {

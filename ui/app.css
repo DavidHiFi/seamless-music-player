@@ -44,6 +44,7 @@
   --shadow-big: 0 12px 32px rgba(17, 17, 27, 0.55);
   --glow: 0 0 9px -3px rgba(137, 180, 250, 0.55);
   --blur: 22px;
+  --gutter: 12px;
   --font: "FiraCode Nerd Font", "FiraCode NF", "Fira Code", monospace;
   --motion: 1;
   --dur-open: 160ms;
@@ -143,7 +144,7 @@ img { -webkit-user-drag: none; user-select: none; }
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding-top: 0;
+  padding: 0 4px 4px;
   /* The native title bar keeps its drag area; the page fades its tint under it. */
 }
 
@@ -157,7 +158,7 @@ img { -webkit-user-drag: none; user-select: none; }
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 6px 12px 4px;
+  padding: 6px var(--gutter) 4px;
 }
 
 .tabs {
@@ -310,7 +311,7 @@ img { -webkit-user-drag: none; user-select: none; }
 .page {
   flex: 1;
   min-height: 0;
-  padding: 4px 22px 12px;
+  padding: 4px var(--gutter) 12px;
   overflow-y: auto;
 }
 .page.noscroll { overflow: hidden; display: flex; flex-direction: column; }
@@ -521,24 +522,40 @@ img { -webkit-user-drag: none; user-select: none; }
 
 .tbl-head {
   display: flex;
-  height: 30px;
-  position: sticky; top: 0; z-index: 5;
-  background: linear-gradient(var(--mantle) 78%, transparent);
+  flex: 0 0 auto;
+  height: 34px;
+  margin-bottom: 6px;
+  padding: 3px 0;
+  position: relative; z-index: 5;
+  border-radius: 10px;
+  background: var(--mantle);
+  box-shadow: inset 0 0 0 2px var(--edge-2);
   font-size: 11px;
-  color: var(--ov1);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ov2);
   user-select: none;
 }
 .tbl-head > div {
-  display: flex; align-items: center; gap: 4px;
+  display: flex; align-items: center; gap: 5px;
   padding: 0 8px; flex: 1 1 0; min-width: 0;
   overflow: hidden; white-space: nowrap;
+  border-radius: 7px;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
 }
-.tbl-head > div:hover { color: var(--text); }
-.tbl-head .sort { color: var(--blue); }
-.tbl-head .arrow { font-size: 9px; }
+.tbl-head .h-label { overflow: hidden; text-overflow: ellipsis; }
+.tbl-head .sortable { cursor: pointer; }
+.tbl-head .sortable:hover { background: var(--s0); color: var(--text); }
+.tbl-head .sortable:active { background: var(--s1); }
+.tbl-head .sortable:focus-visible { box-shadow: inset 0 0 0 2px var(--blue); border-radius: 7px; }
+.tbl-head .sort .h-label {
+  background: var(--grad-90); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.tbl-head .arrow { display: inline-flex; flex: none; color: var(--mauve); }
+.tbl-head .arrow .ic, .tbl-head .arrow svg { width: 12px; height: 12px; }
 
 /* both reserve the scrollbar's room so the header lines up with the rows */
-.tbl-head { overflow: hidden; scrollbar-gutter: stable; }
+.tbl-head { overflow: hidden; scrollbar-gutter: stable; padding: 3px 9px 3px 3px; }
 .tbl-scroll { flex: 1; min-height: 0; overflow-y: auto; position: relative; scrollbar-gutter: stable; }
 
 .tbl-row {
@@ -582,12 +599,14 @@ img { -webkit-user-drag: none; user-select: none; }
 .tbl-row .c-rate, .tbl-head .c-rate { flex: 0 0 84px; justify-content: flex-end; }
 .tbl-row .c-love, .tbl-head .c-love { flex: 0 0 56px; justify-content: center; }
 .tbl-row .c-love .badge-love { width: 12px; height: 12px; }
+.tbl-row .c-date, .tbl-head .c-date { flex: 0 0 112px; }
+.tbl-row .c-date { color: var(--sub0); }
 .tbl-row .c-colon { flex: 0 0 34px; justify-content: center; color: var(--ov1); }
 
 /* spacer keeps the row height inside the virtual scroll */
 .tbl-spacer { width: 100%; pointer-events: none; }
 /* the window of rendered rows sits on top of the spacer, moved by transform */
-.tbl-layer { position: absolute; top: 0; left: 0; right: 0; will-change: transform; }
+.tbl-layer { position: absolute; top: 0; left: 3px; right: 9px; will-change: transform; }
 
 /* ---------- banner (artist, album, playlist) ---------- */
 .banner { display: flex; align-items: flex-end; gap: 24px; padding: 10px 0 6px; }
@@ -1015,8 +1034,9 @@ img { -webkit-user-drag: none; user-select: none; }
 /* ---------- playbar ---------- */
 .playbar {
   flex: 0 0 auto;
-  padding: 0 14px 8px;
+  padding: 0 var(--gutter) 6px;
   background: linear-gradient(transparent, rgba(17, 17, 27, 0.55) 34%);
+  border-radius: 0 0 12px 12px;
 }
 .wave-row { display: flex; align-items: center; gap: 10px; padding: 2px 2px 4px; }
 .wave-time { flex: 0 0 44px; color: var(--ov1); font-size: 11px; }
@@ -1329,7 +1349,7 @@ body:not(.popup) .popup-layer { display: none; }
 @media (max-width: 620px) {
   .topbar { flex-wrap: wrap; }
   .search { width: 100%; max-width: none; order: 3; }
-  .page { padding: 4px 12px 10px; }
+  :root { --gutter: 10px; }
   .np { width: 150px; min-width: 0; }
   .np .rating, .np #loveBtn { display: none; }
   .utils .vol, #sleepBtn, #speedBtn, #miniBtn { display: none; }
@@ -1338,8 +1358,8 @@ body:not(.popup) .popup-layer { display: none; }
   .np-left { flex: 0 0 auto; }
   .np-lyrics { flex: 0 0 auto; min-height: 180px; }
   .banner { flex-direction: column; align-items: flex-start; gap: 12px; }
-  .tbl-row .c-rate, .tbl-row .c-plays, .tbl-row .c-album { display: none; }
-  .tbl-head .c-rate, .tbl-head .c-plays, .tbl-head .c-album { display: none; }
+  .tbl-row .c-rate, .tbl-row .c-plays, .tbl-row .c-album, .tbl-row .c-date { display: none; }
+  .tbl-head .c-rate, .tbl-head .c-plays, .tbl-head .c-album, .tbl-head .c-date { display: none; }
 }
 
 /* While the main window fades in or out it is layered, so the glass is off for
